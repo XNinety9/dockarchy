@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "x99.dockarchy",
   "name": "Dockarchy",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "XNinety9",
   "license": "WTFPL",
   "description": "Docker container status for local and remote (ssh) hosts in the Omarchy bar, with CPU/memory per container, start/stop/restart, logs and shell access.",
@@ -37,7 +37,8 @@
         "CPU",
         "Memory"
       ],
-      "sparkSamples": 20
+      "sparkSamples": 20,
+      "updateCheckHours": 6
     },
     "schema": [
       {
@@ -148,6 +149,16 @@
         ],
         "defaultValue": "Problems",
         "description": "Notify when a container turns unhealthy or stops on its own, or a host stops answering. Recoveries are the way back."
+      },
+      {
+        "key": "updateCheckHours",
+        "type": "integer",
+        "label": "Check registries for newer images every (hours)",
+        "min": 0,
+        "max": 168,
+        "step": 1,
+        "defaultValue": 6,
+        "description": "Compares each running image's digest with its registry (anonymous HEAD request, run on the host that owns the container). 0 disables. Press U in the panel to check now."
       },
       {
         "key": "barFormat",

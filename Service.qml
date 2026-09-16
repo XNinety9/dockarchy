@@ -43,6 +43,13 @@ Item {
   readonly property var sparkMetrics: validMetrics(listSetting("sparkMetrics"))
   readonly property int sparkSamples: intSetting("sparkSamples", 20, 5, 240)
   readonly property bool runningAccent: boolSetting("runningAccent", false)
+  // Hours between registry checks for newer images; 0 disables.
+  readonly property int updateCheckHours: intSetting("updateCheckHours", 6, 0, 168)
+  property var updates: ({})
+  property int updateCount: 0
+  property double updatesCheckedAt: 0
+  property bool checkingUpdates: false
+  property string updatesError: ""
   // "host/id" -> {cpu: [], mem: []}, the last HISTORY_LENGTH polls.
   property var history: ({})
   // "Off" | "Problems" | "Problems and recoveries"
@@ -51,7 +58,13 @@ Item {
   readonly property bool busy: statusProcess.running || actionProcess.running
   readonly property bool actionRunning: actionProcess.running
   readonly property bool healthy: counts.unhealthy === 0 && counts.unreachable === 0
-  readonly property string summaryText: Model.summaryText(everRefreshed ? counts : null, installed)
+  readonly property var countsWithUpdates: {
+    var c = {}
+    for (var k in counts) c[k] = counts[k]
+    c.updates = updateCount
+    return c
+  }
+  readonly property string summaryText: Model.summaryText(everRefreshed ? countsWithUpdates : null, installed)
 
   // Notification icons are Nerd Font glyphs rendered to PNG in the theme's
   // colours at startup (and again when the theme changes). Until that has
@@ -253,6 +266,76 @@ Item {
     return out.length > 0 ? out : ["CPU", "Memory"]
   }
 
+  // ---- image updates
+  function checkUpdates(force) {
+    if (updatesProcess.running || !installed) return
+    if (updateCheckHours <= 0 && !force) return
+    checkingUpdates = true
+    var cmd = [pluginDir + "/bin/dockarchy-updates", "--timeout", "150",
+      "--cache", iconDir + "/updates.json", "--max-age", String(force ? 0 : updateCheckHours * 3600)]
+    if (contexts.length > 0) { cmd.push("--"); for (var i = 0; i < contexts.length; i++) cmd.push(contexts[i]) }
+    updatesProcess.command = cmd
+    updatesProcess.running = true
+  }
+
+  function applyUpdates(raw) {
+    var parsed = Model.parseUpdates(raw)
+    if (!parsed.ok) { updatesError = parsed.error; return }
+    updates = parsed.byKey
+    updateCount = parsed.count
+    updatesCheckedAt = parsed.checkedAt
+    var msgs = []
+    for (var h in parsed.errors) msgs.push(h + ": " + parsed.errors[h])
+    updatesError = msgs.join(" · ")
+  }
+
+  // The update entry for a container's image, or null when unknown.
+  function updateFor(host, container) {
+    if (!host || !container) return null
+    var entry = updates[String(host.name) + "/" + String(container.image)]
+    return entry && entry.update === true ? entry : null
+  }
+
+  function groupHasUpdate(host, group) {
+    if (!host || !group) return false
+    for (var i = 0; i < group.containers.length; i++) if (updateFor(host, group.containers[i])) return true
+    return false
+  }
+
+  // Pull the newer image and recreate, in a terminal so the user sees the
+  // progress and any error. Compose containers use their project directory
+  // (docker compose pull/up -d for that service); standalone ones can only be
+  // pulled — recreating them needs their original run arguments.
+  function pullAndRecreate(host, container) {
+    if (!host || !container) return
+    var body
+    if (container.project && container.workingDir) {
+      var svc = container.service ? " " + Model.shellQuote(container.service) : ""
+      body = "cd " + Model.shellQuote(container.workingDir) + " && docker compose pull" + svc + " && docker compose up -d" + svc
+    } else {
+      body = "docker pull " + Model.shellQuote(container.image) + " && echo && echo 'Pulled. Recreate " + container.name + " yourself: this container is not managed by compose.'"
+    }
+    runInTerminalThenRecheck(host, body)
+  }
+
+  function pullProject(host, group) {
+    if (!host || !group || !group.workingDir) return
+    runInTerminalThenRecheck(host, "cd " + Model.shellQuote(group.workingDir) + " && docker compose pull && docker compose up -d")
+  }
+
+  function runInTerminalThenRecheck(host, body) {
+    var ssh = Model.sshArgv(host.endpoint)
+    var inner
+    if (ssh) {
+      var argv = ssh.slice(0, 1).concat(["-t"]).concat(ssh.slice(1)).concat([body])
+      inner = argv.map(Model.shellQuote).join(" ")
+    } else {
+      inner = "DOCKER_CONTEXT=" + Model.shellQuote(String(host.name)) + " sh -c " + Model.shellQuote(body)
+    }
+    var script = inner + "; status=$?; echo; if [ $status -eq 0 ]; then echo 'Done. Re-checking images…'; else echo \"Failed (exit $status).\"; fi; omarchy-shell x99.dockarchy checkUpdates >/dev/null 2>&1; sleep 3"
+    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.dockarchy-pull", "sh", "-c", script])
+  }
+
   function historyFor(host, container) {
     if (!host || !container) return null
     var series = history[String(host.name) + "/" + String(container.id)]
@@ -426,6 +509,38 @@ Item {
       else root.lastError = root.elide(stderr || stdout || "dockarchy-status exited with " + exitCode)
       if (root._refreshPending) delayedRefresh.restart()
     }
+  }
+
+  Process {
+    id: updatesProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: updatesStdout; waitForEnd: true }
+    stderr: StdioCollector { id: updatesStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.checkingUpdates = false
+      if (exitCode === 0) root.applyUpdates(String(updatesStdout.text || ""))
+      else root.updatesError = root.elide(String(updatesStderr.text || "") || "dockarchy-updates exited with " + exitCode)
+    }
+  }
+
+  // Registry checks are slow-ish and rate-limited; run them well apart from
+  // the status poll: once shortly after startup (served from cache when it
+  // is fresh), then hourly — the cache's max-age enforces updateCheckHours.
+  Timer {
+    id: updatesTimer
+    interval: 3600 * 1000
+    repeat: true
+    running: root.updateCheckHours > 0
+    onTriggered: root.checkUpdates(false)
+  }
+
+  Timer {
+    id: updatesKickoff
+    interval: 20000
+    repeat: false
+    running: true
+    onTriggered: root.checkUpdates(false)
   }
 
   Process {

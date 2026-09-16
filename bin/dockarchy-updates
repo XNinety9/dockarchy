@@ -1,0 +1,180 @@
+#!/bin/bash
+
+# Check whether newer images exist in their registries for the containers of
+# one or more Docker contexts, and print one JSON document:
+#
+#   {"hosts":[{"name":"default","ok":true,"error":"","images":[
+#      {"ref":"nginx:alpine","local":"sha256:…","remote":"sha256:…","update":true}]}]}
+#
+# Usage: dockarchy-updates [--timeout SEC] [--cache FILE --max-age SEC] [context ...]
+#
+# With --cache, a result younger than --max-age is printed as is and nothing
+# is queried; otherwise the fresh result is written there. The document then
+# carries "checkedAt" (epoch seconds).
+#
+# Like dockarchy-status, the work runs on the host that owns the containers
+# (over one ssh session for ssh:// contexts) so registry access, credentials
+# and DNS are the server's, not this machine's. Each distinct image reference
+# costs one anonymous HEAD request (plus one token fetch) against its
+# registry; images built locally or pulled by digest report "update": null.
+
+set -uo pipefail
+
+TIMEOUT=120
+CACHE=""
+MAX_AGE=0
+CONTEXTS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --timeout) TIMEOUT="${2:-120}"; shift 2 ;;
+  --cache) CACHE="$2"; shift 2 ;;
+  --max-age) MAX_AGE="${2:-0}"; shift 2 ;;
+  --) shift; CONTEXTS+=("$@"); break ;;
+  *) CONTEXTS+=("$1"); shift ;;
+  esac
+done
+
+if [[ -n $CACHE && -s $CACHE && $MAX_AGE -gt 0 ]]; then
+  age=$(( $(date +%s) - $(stat -c %Y "$CACHE" 2>/dev/null || echo 0) ))
+  if [[ $age -lt $MAX_AGE ]] && jq -e . "$CACHE" >/dev/null 2>&1; then
+    cat "$CACHE"
+    exit 0
+  fi
+fi
+
+command -v docker >/dev/null 2>&1 || { jq -cn '{hosts: [], checkedAt: now|floor}'; exit 0; }
+
+declare -A ENDPOINTS=()
+KNOWN=()
+while IFS=$'\t' read -r name endpoint; do
+  [[ -z $name ]] && continue
+  ENDPOINTS["$name"]="$endpoint"
+  KNOWN+=("$name")
+done < <(docker context ls --format '{{.Name}}\t{{.DockerEndpoint}}' 2>/dev/null)
+[[ ${#CONTEXTS[@]} -eq 0 ]] && CONTEXTS=("${KNOWN[@]}")
+[[ ${#CONTEXTS[@]} -eq 0 ]] && CONTEXTS=("default")
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# The script executed on each host. It needs docker, curl and jq there.
+remote_script() {
+  cat <<'REMOTE'
+set -u
+command -v curl >/dev/null 2>&1 || { echo '{"error":"curl is not installed on this host"}'; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo '{"error":"jq is not installed on this host"}'; exit 0; }
+
+ACCEPT='application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
+
+# ref -> registry host, repository path, tag
+split_ref() {
+  local ref="$1" host repo tag first
+  ref="${ref%%@*}"
+  if [[ $ref == */* ]]; then
+    first="${ref%%/*}"
+    # A first path component with a dot, a port or "localhost" is a registry.
+    if [[ $first == *.* || $first == *:* || $first == localhost ]]; then
+      host="$first"; repo="${ref#*/}"
+    else
+      host="registry-1.docker.io"; repo="$ref"
+    fi
+  else
+    host="registry-1.docker.io"; repo="library/$ref"
+  fi
+  [[ $host == docker.io || $host == index.docker.io ]] && host="registry-1.docker.io"
+  if [[ ${repo##*/} == *:* ]]; then tag="${repo##*:}"; repo="${repo%:*}"; else tag="latest"; fi
+  printf '%s\t%s\t%s\n' "$host" "$repo" "$tag"
+}
+
+remote_digest() {
+  local host="$1" repo="$2" tag="$3" url hdr auth realm service scope token
+  url="https://$host/v2/$repo/manifests/$tag"
+  hdr="$(curl -sSI -m 20 -H "Accept: $ACCEPT" "$url" 2>/dev/null)" || return 1
+  if grep -qi '^HTTP/[0-9.]* 401' <<<"$hdr"; then
+    auth="$(grep -i '^www-authenticate:' <<<"$hdr" | head -1)"
+    realm="$(sed -n 's/.*realm="\([^"]*\)".*/\1/p' <<<"$auth")"
+    service="$(sed -n 's/.*service="\([^"]*\)".*/\1/p' <<<"$auth")"
+    scope="$(sed -n 's/.*scope="\([^"]*\)".*/\1/p' <<<"$auth")"
+    [[ -z $realm ]] && return 1
+    [[ -z $scope ]] && scope="repository:$repo:pull"
+    token="$(curl -sS -m 20 "$realm?service=$service&scope=$scope" 2>/dev/null | jq -r '.token // .access_token // empty')"
+    [[ -z $token ]] && return 1
+    hdr="$(curl -sSI -m 20 -H "Accept: $ACCEPT" -H "Authorization: Bearer $token" "$url" 2>/dev/null)" || return 1
+  fi
+  grep -qi '^HTTP/[0-9.]* 200' <<<"$hdr" || return 1
+  grep -i '^docker-content-digest:' <<<"$hdr" | head -1 | awk '{print $2}' | tr -d '\r'
+}
+
+check_ref() {
+  local ref="$1" digests host repo tag local_digest remote match
+  [[ -z $ref || $ref == sha256:* ]] && return
+  digests="$(docker image inspect "$ref" --format '{{json .RepoDigests}}' 2>/dev/null)"
+  [[ -z $digests || $digests == "null" ]] && digests="[]"
+  IFS=$'\t' read -r host repo tag < <(split_ref "$ref")
+  local_digest="$(jq -r '.[] | select(test("@")) | split("@")[1]' <<<"$digests" | head -1)"
+  if [[ -z $local_digest || $ref == *@sha256:* ]]; then
+    jq -cn --arg ref "$ref" '{ref: $ref, local: "", remote: "", update: null}'
+    return
+  fi
+  remote="$(remote_digest "$host" "$repo" "$tag")" || remote=""
+  if [[ -z $remote ]]; then
+    jq -cn --arg ref "$ref" --arg local "$local_digest" '{ref: $ref, local: $local, remote: "", update: null}'
+  else
+    match="$(jq -r --arg d "$remote" '[.[] | select(endswith("@" + $d))] | length' <<<"$digests")"
+    jq -cn --arg ref "$ref" --arg local "$local_digest" --arg remote "$remote" --argjson up "$([[ $match -gt 0 ]] && echo false || echo true)" \
+      '{ref: $ref, local: $local, remote: $remote, update: $up}'
+  fi
+}
+export -f check_ref split_ref remote_digest
+export ACCEPT
+
+# Distinct image references of running containers, a few registries at a time.
+docker ps --format '{{.Image}}' | sort -u | xargs -r -P 6 -I{} bash -c 'check_ref "$1"' _ {}
+REMOTE
+}
+
+ssh_argv_for() {
+  local url="$1" rest user hostport host port
+  rest="${url#ssh://}"; rest="${rest%%/*}"
+  if [[ $rest == *@* ]]; then user="${rest%%@*}"; hostport="${rest#*@}"; else user=""; hostport="$rest"; fi
+  if [[ $hostport == *:* ]]; then host="${hostport%%:*}"; port="${hostport##*:}"; else host="$hostport"; port=""; fi
+  SSH_ARGV=(ssh -o BatchMode=yes -o ConnectTimeout=15 -T)
+  [[ -n $port ]] && SSH_ARGV+=(-p "$port")
+  [[ -n $user ]] && SSH_ARGV+=(-l "$user")
+  SSH_ARGV+=(-- "$host")
+}
+
+query() {
+  local idx="$1" ctx="$2" rc endpoint="${ENDPOINTS[$ctx]:-}"
+  local out="$TMP/$idx.out" err="$TMP/$idx.err"
+  if [[ $endpoint == ssh://* ]]; then
+    local SSH_ARGV; ssh_argv_for "$endpoint"
+    timeout "$TIMEOUT" "${SSH_ARGV[@]}" "bash -s" <<<"$(remote_script)" >"$out" 2>"$err"; rc=$?
+  else
+    timeout "$TIMEOUT" env DOCKER_CONTEXT="$ctx" bash -s <<<"$(remote_script)" >"$out" 2>"$err"; rc=$?
+  fi
+  if [[ $rc -ne 0 ]]; then
+    local msg; [[ $rc -eq 124 ]] && msg="Timed out after ${TIMEOUT}s" || msg="$(tr '\n' ' ' <"$err" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+    jq -cn --arg name "$ctx" --arg error "${msg:-exit $rc}" '{name: $name, ok: false, error: $error, images: []}' >"$TMP/$idx.json"
+    return
+  fi
+  if grep -q '^{"error"' "$out"; then
+    jq -cn --arg name "$ctx" --arg error "$(jq -r .error "$out" | head -1)" '{name: $name, ok: false, error: $error, images: []}' >"$TMP/$idx.json"
+    return
+  fi
+  jq -cs --arg name "$ctx" '{name: $name, ok: true, error: "", images: .}' "$out" >"$TMP/$idx.json" 2>/dev/null \
+    || jq -cn --arg name "$ctx" '{name: $name, ok: false, error: "Unreadable output", images: []}' >"$TMP/$idx.json"
+}
+
+i=0
+for ctx in "${CONTEXTS[@]}"; do
+  query "$(printf '%03d' "$i")" "$ctx" &
+  i=$((i + 1))
+done
+wait
+result="$(jq -cs '{hosts: ., checkedAt: (now|floor)}' "$TMP"/*.json)"
+if [[ -n $CACHE ]]; then
+  mkdir -p "$(dirname "$CACHE")"
+  printf '%s\n' "$result" >"$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"
+fi
+printf '%s\n' "$result"

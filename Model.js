@@ -304,6 +304,7 @@ function summaryText(counts, installed) {
   parts.push(counts.running + " running")
   if (counts.stopped > 0) parts.push(counts.stopped + " stopped")
   if (counts.unhealthy > 0) parts.push(counts.unhealthy + " unhealthy")
+  if (counts.updates > 0) parts.push(counts.updates + (counts.updates === 1 ? " update" : " updates"))
   if (counts.hosts > 1 || counts.unreachable > 0) {
     var hostText = counts.hosts + (counts.hosts === 1 ? " host" : " hosts")
     if (counts.unreachable > 0) hostText += " (" + counts.unreachable + " unreachable)"
@@ -629,6 +630,30 @@ function diffSnapshots(prev, next, touched) {
   return events
 }
 
+// ---- image updates ----------------------------------------------------------
+
+// dockarchy-updates output -> {byKey: {"host/ref": entry}, count, checkedAt, errors: {host: msg}}
+function parseUpdates(raw) {
+  var text = String(raw || "").trim()
+  if (text === "") return { ok: false, error: "Empty updates output" }
+  var data
+  try { data = JSON.parse(text) } catch (e) { return { ok: false, error: "Invalid updates JSON: " + e } }
+  var byKey = {}
+  var errors = {}
+  var count = 0
+  var hosts = data && data.hosts && typeof data.hosts.length === "number" ? data.hosts : []
+  for (var h = 0; h < hosts.length; h++) {
+    var host = hosts[h]
+    if (!host.ok) { errors[host.name] = String(host.error || "update check failed"); continue }
+    for (var i = 0; i < (host.images || []).length; i++) {
+      var img = host.images[i]
+      byKey[host.name + "/" + img.ref] = img
+      if (img.update === true) count++
+    }
+  }
+  return { ok: true, byKey: byKey, count: count, errors: errors, checkedAt: data && data.checkedAt ? data.checkedAt * 1000 : Date.now() }
+}
+
 // Python-style template for the bar label: "{running}/{total}" etc. Unknown
 // names are left in place so a typo is visible rather than silently blank;
 // "{{" and "}}" produce literal braces.
@@ -638,7 +663,8 @@ function formatBar(template, counts) {
     total: c.total, running: c.running, alive: c.running, up: c.running,
     stopped: c.stopped, down: c.stopped, exited: c.stopped,
     unhealthy: c.unhealthy, unreachable: c.unreachable,
-    errors: c.unhealthy + c.unreachable, hosts: c.hosts
+    errors: c.unhealthy + c.unreachable, hosts: c.hosts,
+    updates: c.updates || 0
   }
   return String(template || "")
     .replace(/\{\{/g, "\u0001").replace(/\}\}/g, "\u0002")
@@ -680,6 +706,7 @@ if (typeof module !== "undefined") {
     pushHistory: pushHistory, sparkPoints: sparkPoints, seriesStats: seriesStats, bytesText: bytesText, historyTooltip: historyTooltip, HISTORY_LENGTH: HISTORY_LENGTH,
     METRICS: METRICS, METRIC_NAMES: METRIC_NAMES, ioBytes: ioBytes, ioTotal: ioTotal, rateText: rateText, metricValueText: metricValueText,
     metricCurrent: metricCurrent, metricLabel: metricLabel, windowText: windowText,
+    parseUpdates: parseUpdates,
     matchesQuery: matchesQuery, filterContainers: filterContainers, groupContainers: groupContainers, groupKey: groupKey, groupSummary: groupSummary,
     sshArgv: sshArgv, shellQuote: shellQuote, snapshot: snapshot, diffSnapshots: diffSnapshots
   }

@@ -269,8 +269,8 @@ Panel {
     var row = selected
     var sort = " · t sort: " + sortBy
     if (row && row.kind === "host") return "j/k move · ⏎ fold host · h hide/show stopped · L lazydocker · / search" + sort
-    if (row && row.kind === "group") return "j/k move · ⏎ fold · u up · d down · r restart · l logs · z fold all · / search" + sort
-    return "j/k move · ⏎ start/stop · l logs · s shell · r restart · o open port · m menu · x kill/remove · / search" + sort
+    if (row && row.kind === "group") return "j/k move · ⏎ fold · u up · d down · r restart · l logs · p pull & recreate · z fold all · / search" + sort
+    return "j/k move · ⏎ start/stop · l logs · s shell · r restart · o open port · p pull · m menu · x kill/remove · / search" + sort
   }
 
   function scrollItemIntoView(item) {
@@ -331,7 +331,7 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { docker.refresh(); return "ok" }
     function status(): string { return docker.summaryText }
-    function version(): string { return "0.6.0" }
+    function version(): string { return "0.7.0" }
     function running(): string { return String(docker.counts.running) }
     function settings(): string { return JSON.stringify({ settings: root.settings, contexts: docker.contexts }) }
     function rows(): string {
@@ -354,6 +354,12 @@ Panel {
       if (!series) return "no history yet"
       return "cpu " + JSON.stringify(series.cpu) + "\nmem " + JSON.stringify(series.mem.map(Model.bytesText))
         + "\nnet " + JSON.stringify(series.net.map(Model.rateText)) + "\ndisk " + JSON.stringify(series.disk.map(Model.rateText)) + "\npids " + JSON.stringify(series.pids)
+    }
+    function checkUpdates(): string { docker.checkUpdates(true); return "ok" }
+    function updates(): string {
+      var out = []
+      for (var k in docker.updates) if (docker.updates[k].update === true) out.push(k)
+      return out.length ? out.join("\n") : (docker.updatesCheckedAt > 0 ? "no updates (checked " + new Date(docker.updatesCheckedAt).toLocaleTimeString() + ")" : "not checked yet")
     }
     // omarchy-shell x99.dockarchy sort <State|Name|CPU|Memory|next>
     function sort(mode: string): string {
@@ -441,6 +447,9 @@ Panel {
         else if (t === "o") root.openFirstPort(row)
         else if (t === "m") root.openMenu(row)
         else if (t === "i" && row && row.kind === "container") docker.openInspect(row.host, row.container)
+        else if (t === "p" && row && row.kind === "container") docker.pullAndRecreate(row.host, row.container)
+        else if (t === "p" && row && row.kind === "group") docker.pullProject(row.host, row.group)
+        else if (t === "U") docker.checkUpdates(true)
         else if (t === "s" && row && row.kind === "container") docker.openShell(row.host, row.container)
         else if (t === "c" && row && row.kind === "container") docker.copyToClipboard(row.container.name)
         else if (t === "L") docker.openLazydocker(row ? row.host : null)
@@ -550,9 +559,9 @@ Panel {
 
         Text {
           textFormat: Text.PlainText
-          visible: docker.actionStatus !== "" || docker.lastError !== ""
+          visible: docker.actionStatus !== "" || docker.lastError !== "" || docker.checkingUpdates
           width: parent.width
-          text: docker.actionStatus !== "" ? docker.actionStatus : docker.lastError
+          text: docker.actionStatus !== "" ? docker.actionStatus : (docker.lastError !== "" ? docker.lastError : "Checking registries for newer images…")
           color: docker.lastError !== "" && docker.actionStatus === "" ? root.urgent : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -890,6 +899,7 @@ Panel {
     readonly property bool anyRunning: group && group.counts.running > 0
     readonly property bool allRunning: group && group.counts.running === group.counts.total
     readonly property bool unhealthy: group && group.counts.unhealthy > 0
+    readonly property bool hasUpdate: docker.groupHasUpdate(host, group)
 
     hasCursor: root.cursorActive && root.cursorIndex === flatIndex && flatIndex >= 0
     foreground: root.foreground
@@ -960,6 +970,16 @@ Panel {
       }
 
       PanelActionButton {
+        iconText: "󰚰"
+        tooltipText: "Pull newer images & recreate (p)"
+        visible: groupRow.hasUpdate && groupRow.group && groupRow.group.workingDir !== ""
+        foreground: Color.accent
+        fontFamily: root.fontFamily
+        Layout.alignment: Qt.AlignVCenter
+        onClicked: docker.pullProject(groupRow.host, groupRow.group)
+      }
+
+      PanelActionButton {
         iconText: "󰈙"
         tooltipText: "Project logs"
         foreground: root.foreground
@@ -1002,6 +1022,7 @@ Panel {
     readonly property int flatIndex: key !== "" ? root.rowIndexOf(key) : -1
     readonly property bool pending: docker.isPending(host, container) || docker.isGroupPending(host, group)
     readonly property var history: docker.historyFor(host, container)
+    readonly property var imageUpdate: docker.updateFor(host, container)
     readonly property bool unhealthy: container && (container.health === "unhealthy" || container.state === "dead")
     readonly property color stateColor: {
       if (!container) return root.dim
@@ -1027,6 +1048,7 @@ Panel {
       for (var p = 0; p < ports.length && p < 4; p++) {
         items.push({ icon: "󰖟", label: "Open " + Model.portUrl(host ? host.endpoint : "", ports[p]), kind: "port", port: ports[p] })
       }
+      if (imageUpdate) items.push({ icon: "󰚰", label: container.project ? "Pull & recreate (newer image)" : "Pull newer image", kind: "pull" })
       items.push({ icon: "󰈙", label: "Logs", kind: "logs" })
       if (container.running) items.push({ icon: "󰆍", label: "Shell", kind: "shell" })
       items.push({ icon: "󰋽", label: "Inspect", kind: "inspect" })
@@ -1050,6 +1072,7 @@ Panel {
       if (!item) return
       var r = { kind: "container", host: host, group: group, container: container, key: key }
       if (item.kind === "port") docker.openPort(host, item.port)
+      else if (item.kind === "pull") docker.pullAndRecreate(host, container)
       else if (item.kind === "logs") docker.openLogs(host, container)
       else if (item.kind === "shell") docker.openShell(host, container)
       else if (item.kind === "inspect") docker.openInspect(host, container)
@@ -1162,14 +1185,46 @@ Panel {
         Layout.fillWidth: true
         spacing: Style.space(1)
 
-        Text {
-          textFormat: Text.PlainText
+        RowLayout {
           Layout.fillWidth: true
-          text: row.container ? row.container.name : ""
-          color: row.container && row.container.running ? root.runningColor : root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          elide: Text.ElideRight
+          spacing: Style.space(6)
+
+          Text {
+            textFormat: Text.PlainText
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
+            text: row.container ? row.container.name : ""
+            color: row.container && row.container.running ? root.runningColor : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            elide: Text.ElideRight
+          }
+
+          Text {
+            id: updateBadge
+            visible: row.imageUpdate !== null
+            text: "󰚰"
+            color: Color.accent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.icon
+
+            MouseArea {
+              id: badgeMouse
+              anchors.fill: parent
+              anchors.margins: -Style.space(2)
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: docker.pullAndRecreate(row.host, row.container)
+            }
+
+            PanelToolTip {
+              visible: badgeMouse.containsMouse
+              text: "Newer image available for " + (row.container ? row.container.image : "") + "\nClick or press p to pull" + (row.container && row.container.project ? " and recreate" : "")
+              fontFamily: root.fontFamily
+            }
+          }
+
+          Item { Layout.fillWidth: true }
         }
 
         RowLayout {

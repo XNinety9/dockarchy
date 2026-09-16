@@ -42,9 +42,10 @@ test("--stats merges docker stats rows by short id", () => {
   assert.equal(job.Stats, null, "stopped container has no stats row");
 });
 
-test("without --all only the ps default is requested (stub still returns both)", () => {
+test("without --all only running containers come back", () => {
   const doc = run(["default"]);
   assert.equal(doc.hosts[0].ok, true);
+  assert.deepEqual(doc.hosts[0].containers.map((c) => c.State), ["running"]);
 });
 
 test("a failing daemon marks the host unreachable with its message", () => {

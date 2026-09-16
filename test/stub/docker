@@ -19,8 +19,33 @@ case "$1 $2" in
       fail) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;;
       hang) sleep 60 ;;
     esac
-    printf '{"ID":"%s","Names":"web-%s","Image":"nginx:alpine","State":"running","Status":"Up 3 hours (healthy)","Ports":"0.0.0.0:8080->80/tcp","Labels":"com.docker.compose.project=demo,com.docker.compose.service=web","CreatedAt":"2026-09-16 10:00:00 +0200 CEST"}\n' "$(printf 'a%.0s' {1..64})" "$ctx"
-    printf '{"ID":"%s","Names":"job-%s","Image":"alpine","State":"exited","Status":"Exited (0) 2 days ago","Ports":"","Labels":"","CreatedAt":"2026-09-14 10:00:00 +0200 CEST"}\n' "$(printf 'b%.0s' {1..64})" "$ctx"
+    all=""; fmt=""
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -a|--all) all=1; shift ;;
+        --format) fmt="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    web_id="$(printf 'a%.0s' {1..64})"; job_id="$(printf 'b%.0s' {1..64})"
+    if [[ $fmt == "{{.Image}}" ]]; then
+      echo "nginx:alpine"
+      [[ -n $all ]] && echo "alpine"
+      exit 0
+    fi
+    printf '{"ID":"%s","Names":"web-%s","Image":"nginx:alpine","State":"running","Status":"Up 3 hours (healthy)","Ports":"0.0.0.0:8080->80/tcp","Labels":"com.docker.compose.project=demo,com.docker.compose.service=web","CreatedAt":"2026-09-16 10:00:00 +0200 CEST"}\n' "$web_id" "$ctx"
+    if [[ -n $all ]]; then
+      printf '{"ID":"%s","Names":"job-%s","Image":"alpine","State":"exited","Status":"Exited (0) 2 days ago","Ports":"","Labels":"","CreatedAt":"2026-09-14 10:00:00 +0200 CEST"}\n' "$job_id" "$ctx"
+    fi
+    ;;
+  "image inspect")
+    # RepoDigests for the stub's two images: web-* runs nginx:alpine (pulled),
+    # job-* runs alpine (built locally -> no digest).
+    case "$3" in
+      nginx:alpine) echo '["nginx@sha256:aaaa"]' ;;
+      *) echo '[]' ;;
+    esac
     ;;
   "stats "*)
     printf '{"BlockIO":"0B / 0B","CPUPerc":"0.42%%","Container":"%s","ID":"aaaaaaaaaaaa","MemPerc":"0.03%%","MemUsage":"20.7MiB / 62.4GiB","Name":"web-%s","NetIO":"1kB / 2kB","PIDs":"9"}\n' "$(printf 'a%.0s' {1..64})" "$ctx"

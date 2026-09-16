@@ -232,6 +232,23 @@ test("metric formatting and byte units", () => {
   assert.match(Model.historyTooltip({ cpu: [1, 2], mem: [1, 2], net: [], disk: [], pids: [] }, ["CPU", "Network"], 15), /^Last 2 polls · 15 s\nCPU     min 1%/);
 });
 
+test("parseUpdates", () => {
+  const raw = JSON.stringify({ checkedAt: 1700000000, hosts: [
+    { name: "default", ok: true, error: "", images: [{ ref: "a:1", update: true }, { ref: "b:1", update: false }, { ref: "c", update: null }] },
+    { name: "srv", ok: false, error: "Timed out after 120s", images: [] },
+  ] });
+  const parsed = Model.parseUpdates(raw);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.count, 1);
+  assert.equal(parsed.byKey["default/a:1"].update, true);
+  assert.equal(parsed.errors.srv, "Timed out after 120s");
+  assert.equal(parsed.checkedAt, 1700000000000);
+  assert.equal(Model.parseUpdates("").ok, false);
+  const counts = { total: 3, running: 3, stopped: 0, unhealthy: 0, unreachable: 0, hosts: 1, updates: 2 };
+  assert.equal(Model.summaryText(counts, true), "3 running · 2 updates");
+  assert.equal(Model.formatBar("{running} · {updates} upd", counts), "3 · 2 upd");
+});
+
 test("glyphs", () => {
   assert.equal(Model.stateGlyph({ running: true, state: "running", health: "" }), "󰐊");
   assert.equal(Model.stateGlyph({ running: true, state: "running", health: "unhealthy" }), "󰀦");

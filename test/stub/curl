@@ -1,0 +1,9 @@
+#!/bin/bash
+# Fake registry: any manifests HEAD answers 200 with a digest chosen by
+# DOCKARCHY_STUB_REMOTE_DIGEST (default: same as the stub's local one).
+for a in "$@"; do url="$a"; done
+if [[ $url == *"/manifests/"* ]]; then
+  printf 'HTTP/2 200 \r\ndocker-content-digest: %s\r\n\r\n' "${DOCKARCHY_STUB_REMOTE_DIGEST:-sha256:aaaa}"
+else
+  echo '{"token":"stub"}'
+fi

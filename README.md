@@ -105,6 +105,7 @@ logs, shell — still go through `docker --context`, which is a single request.
 | Host row      | Click to fold/unfold the host · eye button hides/shows its stopped containers · lazydocker |
 | Project row   | Click to fold/unfold · buttons: project logs · restart · start/stop all |
 | Container row | Buttons: logs · shell · restart · start/stop · middle-click copies the name · **right-click opens the menu** |
+| Update badge  | An accent-coloured arrow after the name means a newer image exists in the registry; click it to pull (and recreate, for Compose containers) |
 | Port chip     | `8080→80` under the name: click opens `http://<host>:8080` in your browser |
 | Stats column  | One line per chosen metric (CPU, memory, network, disk, PIDs) with a sparkline over the last polls; hover for details and min/avg/max over the window |
 
@@ -123,6 +124,8 @@ confirmation.
 | `s`       | Shell (`bash`, falling back to `sh`)  | —                                | —                        |
 | `i`       | Inspect                               | —                                | —                        |
 | `o`       | Open the first published port         | —                                | —                        |
+| `p`       | Pull the newer image (and recreate, if Compose) | Pull & recreate the whole project | —                  |
+| `U`       | Check registries for newer images now | same                             | same                     |
 | `m`       | Context menu                          | —                                | —                        |
 | `x`       | Kill (running) / remove (stopped), after confirming | —                  | —                        |
 | `c`       | Copy the container name               | —                                | —                        |
@@ -165,6 +168,25 @@ theme's colours when the shell starts and whenever the theme changes. Without
 ImageMagick the pre-rendered PNGs in `assets/` are used instead. Any Nerd Font
 works; set `DOCKARCHY_ICON_FONT` to force one.
 
+### Image updates
+
+Every `updateCheckHours` (default 6) Dockarchy compares the digest of each
+running container's image with what its registry currently serves for that
+tag — one anonymous `HEAD /v2/<repo>/manifests/<tag>` per distinct image, run
+**on the host that owns the container** (so the server's network, DNS and
+mirrors apply). Results are cached in `~/.cache/dockarchy/updates.json`; `U`
+forces a check. Containers whose image is newer in the registry get a badge,
+their project row gets a pull button, and the panel summary and `{updates}`
+bar placeholder count them.
+
+Pulling runs in a terminal so you see the progress: for Compose containers it
+is `cd <project dir> && docker compose pull <service> && docker compose up -d
+<service>` (the whole project from the project row); standalone containers are
+only pulled, since recreating them needs their original `docker run` flags.
+Images built locally or pulled by digest cannot be compared and are skipped.
+Docker Hub, ghcr.io, lscr.io, quay.io and any registry using the standard
+token flow work; private images needing credentials show as unknown.
+
 ### What the colours mean
 
 Running containers use the theme's text colour; stopped ones are dimmed.
@@ -194,6 +216,7 @@ them there, in the shell's settings UI, or with
 | `sortBy`             | `State`     | `State` (running first, then name), `Name`, `CPU` or `Memory` (hungriest first). `t` cycles it. |
 | `collapsedHosts`, `collapsedGroups`, `hideStoppedHosts` | *(empty)* | Comma-separated lists written by the panel itself as you fold or hide things. |
 | `notifications`      | `Problems`  | `Off`, `Problems`, or `Problems and recoveries` — see Notifications above. |
+| `updateCheckHours`   | `6`         | Hours between registry checks for newer images; `0` disables. |
 | `barFormat`          | `{running}` | Label next to the whale (see below). Empty = icon only.            |
 | `panelWidth`         | `700`       | Popup width in px (300–1400).                                      |
 | `panelMaxHeight`     | `800`       | The popup grows with its content up to this, then scrolls.        |
@@ -213,6 +236,7 @@ them there, in the shell's settings UI, or with
 | `{unreachable}` | Hosts that did not answer                      |
 | `{errors}`      | `{unhealthy}` + `{unreachable}`                |
 | `{hosts}`       | Hosts polled                                   |
+| `{updates}`     | Containers whose image has a newer version     |
 
 Unknown names are left in place so a typo is visible; `{{` and `}}` give
 literal braces.
@@ -237,6 +261,8 @@ omarchy-shell x99.dockarchy version
 omarchy-shell x99.dockarchy settings    # resolved settings, for debugging
 omarchy-shell x99.dockarchy rows        # what the panel currently lists, for debugging
 omarchy-shell x99.dockarchy history <context> <name|id>   # the sparkline series
+omarchy-shell x99.dockarchy checkUpdates                   # registry check now
+omarchy-shell x99.dockarchy updates                        # images with a newer version
 ```
 
 ## Omarchy menu
@@ -270,6 +296,7 @@ bin/dockarchy-status    queries every context in parallel (one ssh session per
                         remote host) and prints a single JSON document
 bin/dockarchy-contexts  lists context names for the settings picker
 bin/dockarchy-menu      adds/removes the Docker submenu in the Omarchy menu
+bin/dockarchy-updates   compares image digests with their registries (on each host)
 ```
 
 `bin/dockarchy-status --all --stats --timeout 5 [ctx ...] | jq .` shows exactly
@@ -306,6 +333,9 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
+- **0.7.0** — image update detection by registry digest, with a badge per
+  container, pull & recreate for Compose services and projects, `{updates}`
+  in the bar label.
 - **0.6.0** — `dockarchy-menu` adds a Docker submenu to the Omarchy menu;
   notification icons are now Nerd Font glyphs rendered in the
   theme's colours; sparklines per running container for a chosen set of metrics
