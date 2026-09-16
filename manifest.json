@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "id": "x99.dockarchy",
+  "name": "Dockarchy",
+  "version": "0.3.0",
+  "author": "x99",
+  "license": "MIT",
+  "description": "Docker container status for local and remote hosts in the Omarchy bar, with start/stop/restart, logs and shell access.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Dockarchy",
+    "description": "Monitor Docker containers across every docker context, local socket or remote ssh:// hosts alike.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "contexts": [],
+      "refreshIntervalSec": 15,
+      "timeoutSec": 10,
+      "showAll": true,
+      "showStats": true,
+      "barFormat": "{running}",
+      "panelWidth": 700,
+      "panelMaxHeight": 800,
+      "alternateRows": false
+    },
+    "schema": [
+      {
+        "key": "contexts",
+        "type": "multiselect",
+        "label": "Docker contexts",
+        "options": [],
+        "optionsCommand": [
+          "bin/dockarchy-contexts"
+        ],
+        "defaultValue": [],
+        "description": "Which docker contexts to monitor. Leave empty to monitor every context. Add a remote server with: docker context create myserver --docker host=ssh://user@myserver"
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 15
+      },
+      {
+        "key": "timeoutSec",
+        "type": "integer",
+        "label": "Per-host timeout (seconds)",
+        "min": 2,
+        "max": 120,
+        "step": 1,
+        "defaultValue": 10,
+        "description": "How long to wait for one host (matters for remote ssh:// contexts) before marking it unreachable."
+      },
+      {
+        "key": "showAll",
+        "type": "boolean",
+        "label": "Show stopped containers",
+        "defaultValue": true
+      },
+      {
+        "key": "showStats",
+        "type": "boolean",
+        "label": "Show CPU / memory per container",
+        "defaultValue": true,
+        "description": "Runs docker stats on each poll (adds about a second)."
+      },
+      {
+        "key": "barFormat",
+        "type": "string",
+        "label": "Bar label",
+        "defaultValue": "{running}",
+        "description": "Text shown next to the whale, Python-style: {running} {total} {stopped} {unhealthy} {unreachable} {errors} {hosts}. e.g. \"{running}/{total}\" or \"{running} up, {errors} err\". Empty = icon only."
+      },
+      {
+        "key": "panelWidth",
+        "type": "integer",
+        "label": "Panel width (px)",
+        "min": 300,
+        "max": 1400,
+        "step": 10,
+        "defaultValue": 700
+      },
+      {
+        "key": "panelMaxHeight",
+        "type": "integer",
+        "label": "Panel max height (px)",
+        "min": 300,
+        "max": 1600,
+        "step": 10,
+        "defaultValue": 800,
+        "description": "The panel grows with its content up to this height, then scrolls."
+      },
+      {
+        "key": "alternateRows",
+        "type": "boolean",
+        "label": "Alternate row shading",
+        "defaultValue": false,
+        "description": "Tint every other container row so neighbours are easy to tell apart."
+      }
+    ]
+  }
+}

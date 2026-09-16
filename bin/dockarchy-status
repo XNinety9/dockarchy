@@ -1,0 +1,143 @@
+#!/bin/bash
+
+# Collect container status from one or more Docker contexts in parallel and
+# print a single JSON array, one entry per context:
+#
+#   [{ "name": "default", "endpoint": "unix:///var/run/docker.sock",
+#      "ok": true, "error": "", "containers": [ {docker ps json}, ... ] }]
+#
+# Usage: dockarchy-status [--all] [--stats] [--timeout SEC] [context ...]
+#
+# With --stats each container also carries a "Stats" object from
+# `docker stats --no-stream` (CPUPerc, MemUsage, MemPerc, NetIO, PIDs…), or
+# null for containers that are not running. Stats add ~1-2s per poll because
+# docker samples twice to compute CPU%.
+#
+# Without explicit contexts every context known to `docker context ls` is
+# queried. Remote hosts are just contexts with an ssh:// endpoint, so the same
+# code path covers local and distant daemons. Each context is bounded by
+# `timeout` so one unreachable server never blocks the others.
+
+set -uo pipefail
+
+ALL=""
+STATS=""
+TIMEOUT=10
+CONTEXTS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --all) ALL="-a"; shift ;;
+  --stats) STATS="1"; shift ;;
+  --timeout) TIMEOUT="${2:-10}"; shift 2 ;;
+  --) shift; CONTEXTS+=("$@"); break ;;
+  *) CONTEXTS+=("$1"); shift ;;
+  esac
+done
+
+if ! command -v docker >/dev/null 2>&1; then
+  jq -cn '{installed: false, hosts: []}'
+  exit 0
+fi
+
+# name<TAB>endpoint for every known context. This is local metadata only and
+# never touches a daemon, so it is fast even when remote hosts are down.
+declare -A ENDPOINTS=()
+KNOWN=()
+while IFS=$'\t' read -r name endpoint; do
+  [[ -z $name ]] && continue
+  ENDPOINTS["$name"]="$endpoint"
+  KNOWN+=("$name")
+done < <(docker context ls --format '{{.Name}}\t{{.DockerEndpoint}}' 2>/dev/null)
+
+if [[ ${#CONTEXTS[@]} -eq 0 ]]; then
+  CONTEXTS=("${KNOWN[@]}")
+fi
+[[ ${#CONTEXTS[@]} -eq 0 ]] && CONTEXTS=("default")
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# Remote hosts: run docker *on the server* over exactly one ssh session per
+# poll. `docker --context ssh://…` instead opens one ssh session per API call
+# — `docker stats` alone means one per container, in parallel — which trips
+# sshd MaxSessions/MaxStartups and gets the client banned by fail2ban.
+# The local socket is driven directly. Both paths print the same two blocks,
+# separated by a marker line: ps JSON lines, then stats JSON lines.
+remote_script() {
+  cat <<REMOTE
+docker ps $ALL --no-trunc --format '{{json .}}' || exit 9
+echo __DOCKARCHY_STATS__
+${STATS:+docker stats --no-stream --format '{{json .}}' 2>/dev/null || true}
+REMOTE
+}
+
+# ssh://[user@]host[:port] -> ssh argv. Everything else about the connection
+# (keys, ControlMaster, ProxyJump…) comes from the user's ~/.ssh/config.
+ssh_argv_for() {
+  local url="$1" rest user hostport host port
+  rest="${url#ssh://}"
+  rest="${rest%%/*}"
+  if [[ $rest == *@* ]]; then user="${rest%%@*}"; hostport="${rest#*@}"; else user=""; hostport="$rest"; fi
+  if [[ $hostport == *:* ]]; then host="${hostport%%:*}"; port="${hostport##*:}"; else host="$hostport"; port=""; fi
+  SSH_ARGV=(ssh -o BatchMode=yes -o ConnectTimeout="$TIMEOUT" -T)
+  [[ -n $port ]] && SSH_ARGV+=(-p "$port")
+  [[ -n $user ]] && SSH_ARGV+=(-l "$user")
+  SSH_ARGV+=(-- "$host")
+}
+
+query() {
+  local idx="$1" ctx="$2" rc
+  local endpoint="${ENDPOINTS[$ctx]:-}"
+  local raw_out="$TMP/$idx.raw" ps_out="$TMP/$idx.ps" stats_out="$TMP/$idx.stats" err_out="$TMP/$idx.err"
+
+  if [[ $endpoint == ssh://* ]]; then
+    local SSH_ARGV
+    ssh_argv_for "$endpoint"
+    timeout "$TIMEOUT" "${SSH_ARGV[@]}" "bash -s" <<<"$(remote_script)" >"$raw_out" 2>"$err_out"
+    rc=$?
+  else
+    # Non-ssh contexts (unix socket, tcp://) go through the context itself,
+    # where the per-call transport cost is negligible.
+    timeout "$TIMEOUT" env DOCKER_CONTEXT="$ctx" bash -s <<<"$(remote_script)" >"$raw_out" 2>"$err_out"
+    rc=$?
+  fi
+
+  awk -v ps="$ps_out" -v st="$stats_out" '
+    BEGIN { out = ps }
+    /^__DOCKARCHY_STATS__$/ { out = st; next }
+    /^\{/ { print > out }
+  ' "$raw_out"
+  : >>"$ps_out"; : >>"$stats_out"
+
+  if [[ $rc -eq 0 ]]; then
+    jq -cn --arg name "$ctx" --arg endpoint "$endpoint" \
+      --slurpfile ps "$ps_out" --slurpfile st "$stats_out" '
+      ($st | map({key: .ID[0:12], value: .}) | from_entries) as $byId
+      | {name: $name, endpoint: $endpoint, ok: true, error: "",
+         containers: ($ps | map(. + {Stats: ($byId[.ID[0:12]] // null)}))}' \
+      >"$TMP/$idx.json" 2>/dev/null \
+      || jq -cn --arg name "$ctx" --arg endpoint "$endpoint" --arg error "Unreadable docker ps output" \
+        '{name: $name, endpoint: $endpoint, ok: false, error: $error, containers: []}' >"$TMP/$idx.json"
+  else
+    local msg
+    if [[ $rc -eq 124 ]]; then
+      msg="Timed out after ${TIMEOUT}s"
+    else
+      msg="$(cat "$err_out" 2>/dev/null | grep -v '^__DOCKARCHY' | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+      [[ -z $msg ]] && msg="docker exited with status $rc"
+    fi
+    jq -cn --arg name "$ctx" --arg endpoint "$endpoint" --arg error "$msg" \
+      '{name: $name, endpoint: $endpoint, ok: false, error: $error, containers: []}' >"$TMP/$idx.json"
+  fi
+}
+
+i=0
+for ctx in "${CONTEXTS[@]}"; do
+  query "$(printf '%03d' "$i")" "$ctx" &
+  i=$((i + 1))
+done
+wait
+
+# Files are zero-padded so the shell glob keeps the caller's context order.
+jq -cs '{installed: true, hosts: .}' "$TMP"/*.json
