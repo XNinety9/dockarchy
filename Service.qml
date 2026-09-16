@@ -40,6 +40,8 @@ Item {
   readonly property bool showStats: boolSetting("showStats", true)
   readonly property bool groupByProject: boolSetting("groupByProject", true)
   readonly property bool showSparklines: boolSetting("showSparklines", true)
+  readonly property var sparkMetrics: validMetrics(listSetting("sparkMetrics"))
+  readonly property int sparkSamples: intSetting("sparkSamples", 20, 5, 240)
   readonly property bool runningAccent: boolSetting("runningAccent", false)
   // "host/id" -> {cpu: [], mem: []}, the last HISTORY_LENGTH polls.
   property var history: ({})
@@ -141,7 +143,7 @@ Item {
     counts = parsed.counts
     everRefreshed = true
     lastError = ""
-    if (showStats) history = Model.pushHistory(history, hosts)
+    if (showStats) history = Model.pushHistory(history, hosts, sparkSamples, Date.now())
     var snap = Model.snapshot(hosts)
     if (_lastSnapshot) notifyChanges(Model.diffSnapshots(_lastSnapshot, snap, currentUserTouched()))
     _lastSnapshot = snap
@@ -199,10 +201,19 @@ Item {
     return null
   }
 
+  // Keep only known metric names, in the canonical order; default CPU+Memory.
+  function validMetrics(names) {
+    var out = []
+    for (var i = 0; i < Model.METRIC_NAMES.length; i++) {
+      if (names.indexOf(Model.METRIC_NAMES[i]) !== -1) out.push(Model.METRIC_NAMES[i])
+    }
+    return out.length > 0 ? out : ["CPU", "Memory"]
+  }
+
   function historyFor(host, container) {
     if (!host || !container) return null
     var series = history[String(host.name) + "/" + String(container.id)]
-    return series && series.cpu.length > 1 ? series : null
+    return series && series.cpu.length > 0 ? series : null
   }
 
   function actionKey(host, container) {

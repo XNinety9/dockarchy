@@ -353,6 +353,7 @@ Panel {
       var series = docker.historyFor(found.host, found.container)
       if (!series) return "no history yet"
       return "cpu " + JSON.stringify(series.cpu) + "\nmem " + JSON.stringify(series.mem.map(Model.bytesText))
+        + "\nnet " + JSON.stringify(series.net.map(Model.rateText)) + "\ndisk " + JSON.stringify(series.disk.map(Model.rateText)) + "\npids " + JSON.stringify(series.pids)
     }
     // omarchy-shell x99.dockarchy sort <State|Name|CPU|Memory|next>
     function sort(mode: string): string {
@@ -1221,11 +1222,11 @@ Panel {
 
       Item {
         id: statsColumn
-        readonly property bool sparks: docker.showSparklines && row.history !== null
+        readonly property bool sparks: docker.showSparklines && row.history !== null && row.history.cpu.length > 1
         visible: docker.showStats && row.container && row.container.running && row.container.stats !== null
         Layout.alignment: Qt.AlignVCenter
-        Layout.preferredWidth: Style.space(sparks ? 118 : 58)
-        implicitWidth: Style.space(sparks ? 118 : 58)
+        Layout.preferredWidth: Style.space(sparks ? 122 : 62)
+        implicitWidth: Style.space(sparks ? 122 : 62)
         implicitHeight: statsInner.implicitHeight
 
         Column {
@@ -1235,53 +1236,38 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(1)
 
-          Row {
-            width: parent.width
-            spacing: Style.space(6)
-            layoutDirection: Qt.RightToLeft
+          Repeater {
+            model: docker.sparkMetrics
+            Row {
+              id: metricRow
+              required property string modelData
+              readonly property var metric: Model.METRICS[modelData]
+              readonly property var series: row.history ? row.history[metric.key] : []
+              readonly property real current: Model.metricCurrent(modelData, row.container, row.history)
+              readonly property bool hot: (modelData === "CPU" && current >= 80) || (modelData === "Memory" && row.container && row.container.stats && row.container.stats.memPerc >= 80)
+              width: parent.width
+              spacing: Style.space(6)
+              layoutDirection: Qt.RightToLeft
 
-            Text {
-              textFormat: Text.PlainText
-              width: Style.space(58)
-              text: "󰘚 " + Model.cpuText(row.container)
-              color: row.container && row.container.stats && row.container.stats.cpu >= 80 ? root.warning : root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              horizontalAlignment: Text.AlignRight
-              anchors.verticalCenter: parent.verticalCenter
-            }
+              Text {
+                textFormat: Text.PlainText
+                width: Style.space(62)
+                text: Model.metricLabel(metricRow.modelData, row.container, row.history)
+                color: metricRow.hot ? root.warning : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignRight
+                anchors.verticalCenter: parent.verticalCenter
+              }
 
-            Sparkline {
-              visible: statsColumn.sparks
-              series: row.history ? row.history.cpu : []
-              ceiling: 100
-              hot: row.container && row.container.stats && row.container.stats.cpu >= 80
-              anchors.verticalCenter: parent.verticalCenter
-            }
-          }
-
-          Row {
-            width: parent.width
-            spacing: Style.space(6)
-            layoutDirection: Qt.RightToLeft
-
-            Text {
-              textFormat: Text.PlainText
-              width: Style.space(58)
-              text: "󰍛 " + Model.memText(row.container)
-              color: row.container && row.container.stats && row.container.stats.memPerc >= 80 ? root.warning : root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              horizontalAlignment: Text.AlignRight
-              anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Sparkline {
-              visible: statsColumn.sparks
-              series: row.history ? row.history.mem : []
-              ceiling: 0
-              hot: row.container && row.container.stats && row.container.stats.memPerc >= 80
-              anchors.verticalCenter: parent.verticalCenter
+              Sparkline {
+                visible: statsColumn.sparks
+                series: metricRow.series
+                ceiling: metricRow.metric.ceiling
+                slots: docker.sparkSamples
+                hot: metricRow.hot
+                anchors.verticalCenter: parent.verticalCenter
+              }
             }
           }
         }
@@ -1295,7 +1281,7 @@ Panel {
 
         PanelToolTip {
           visible: statsMouse.containsMouse
-          text: Model.statsTooltip(row.container) + (row.history ? "\n\n" + Model.historyTooltip(row.history) : "")
+          text: Model.statsTooltip(row.container) + (row.history ? "\n\n" + Model.historyTooltip(row.history, docker.sparkMetrics, docker.refreshIntervalSec) : "")
           fontFamily: root.fontFamily
         }
       }
@@ -1425,6 +1411,7 @@ Panel {
     id: spark
     property var series: []
     property real ceiling: 0
+    property int slots: 20
     property bool hot: false
     readonly property color lineColor: hot ? root.warning : root.dim
     width: Style.space(48)
@@ -1436,7 +1423,7 @@ Panel {
     onPaint: {
       var ctx = getContext("2d")
       ctx.reset()
-      var pts = Model.sparkPoints(series, ceiling)
+      var pts = Model.sparkPoints(series, ceiling, slots)
       if (pts.length < 2) return
       var w = width, h = height, pad = 1
       ctx.beginPath()

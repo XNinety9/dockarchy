@@ -32,7 +32,12 @@
       "notifications": "Problems",
       "sortBy": "State",
       "showSparklines": true,
-      "runningAccent": false
+      "runningAccent": false,
+      "sparkMetrics": [
+        "CPU",
+        "Memory"
+      ],
+      "sparkSamples": 20
     },
     "schema": [
       {
@@ -84,6 +89,33 @@
         "label": "Show CPU / memory sparklines",
         "defaultValue": true,
         "description": "Tiny trend lines over the last 20 polls next to each running container's stats."
+      },
+      {
+        "key": "sparkMetrics",
+        "type": "multiselect",
+        "label": "Metrics to show",
+        "options": [
+          "CPU",
+          "Memory",
+          "Network",
+          "Disk",
+          "PIDs"
+        ],
+        "defaultValue": [
+          "CPU",
+          "Memory"
+        ],
+        "description": "One line per metric next to each running container. Network and Disk are bytes per second between two polls. `omarchy bar set … sparkMetrics CPU,Network` from the CLI."
+      },
+      {
+        "key": "sparkSamples",
+        "type": "integer",
+        "label": "Sparkline history (polls)",
+        "min": 5,
+        "max": 240,
+        "step": 5,
+        "defaultValue": 20,
+        "description": "How many polls a sparkline spans. Window = this × refresh interval; the tooltip shows it."
       },
       {
         "key": "groupByProject",

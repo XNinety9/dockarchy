@@ -106,7 +106,7 @@ logs, shell — still go through `docker --context`, which is a single request.
 | Project row   | Click to fold/unfold · buttons: project logs · restart · start/stop all |
 | Container row | Buttons: logs · shell · restart · start/stop · middle-click copies the name · **right-click opens the menu** |
 | Port chip     | `8080→80` under the name: click opens `http://<host>:8080` in your browser |
-| Stats column  | Sparklines of the last 20 polls next to CPU % and memory; hover for memory limit, network/disk I/O, PIDs, and min/avg/max over the window |
+| Stats column  | One line per chosen metric (CPU, memory, network, disk, PIDs) with a sparkline over the last polls; hover for details and min/avg/max over the window |
 
 The **context menu** (right-click or `m`) gathers everything for one container:
 open each published port, logs, shell, inspect (`docker inspect | less`),
@@ -181,7 +181,9 @@ them there, in the shell's settings UI, or with
 | `timeoutSec`         | `10`        | Per-host limit before it is marked unreachable.                    |
 | `showAll`            | `true`      | Include stopped containers (`docker ps -a`).                       |
 | `showStats`          | `true`      | CPU % and memory per running container (`docker stats`, about a second extra per poll). |
-| `showSparklines`     | `true`      | Trend lines over the last 20 polls next to the stats. CPU is scaled to 100 %, memory to its own peak. |
+| `showSparklines`     | `true`      | Trend lines next to the stats. CPU is scaled to 100 %, the others to their own peak. |
+| `sparkMetrics`       | `CPU,Memory`| Which metrics to show, one line each: `CPU`, `Memory`, `Network`, `Disk`, `PIDs`. Network and disk are bytes/s between two polls. |
+| `sparkSamples`       | `20`        | Polls a sparkline spans (5–240). Window = this × `refreshIntervalSec`, shown in the tooltip. |
 | `groupByProject`     | `true`      | Fold containers under their Compose project with project-level actions. |
 | `sortBy`             | `State`     | `State` (running first, then name), `Name`, `CPU` or `Memory` (hungriest first). `t` cycles it. |
 | `collapsedHosts`, `collapsedGroups`, `hideStoppedHosts` | *(empty)* | Comma-separated lists written by the panel itself as you fold or hide things. |
@@ -285,8 +287,10 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
-- **0.6.0** — CPU and memory sparklines over the last 20 polls, with
-  min/avg/max in the tooltip; optional accent tint for running containers.
+- **0.6.0** — sparklines per running container for a chosen set of metrics
+  (CPU, memory, network and disk throughput, PIDs) over a configurable number
+  of polls, with min/avg/max in the tooltip; optional accent tint for running
+  containers.
 - **0.5.0** — clickable port chips and `o`; right-click / `m` context menu with
   inspect, copy ID, kill and remove behind a confirmation (`x`); host rows fold
   and can hide their stopped containers (`h`), remembered across restarts;

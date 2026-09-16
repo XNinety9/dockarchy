@@ -96,10 +96,17 @@ function parsePercent(text) {
   return isFinite(n) ? n : -1
 }
 
+// Drop trailing zeros of a decimal ("12.30" -> "12.3", "5.00" -> "5") but
+// leave integers alone ("100" stays "100").
+function trimZeros(text) {
+  var t = String(text)
+  return t.indexOf(".") === -1 ? t : t.replace(/0+$/, "").replace(/\.$/, "")
+}
+
 function formatPercent(n) {
   if (n < 0) return "–"
   if (n >= 100) return Math.round(n) + "%"
-  return (n >= 10 ? n.toFixed(1) : n.toFixed(2)).replace(/\.?0+$/, "") + "%"
+  return trimZeros(n >= 10 ? n.toFixed(1) : n.toFixed(2)) + "%"
 }
 
 // "20.72MiB" -> "20.7M", "1.234GiB" -> "1.23G", "512KiB" -> "512K"
@@ -109,7 +116,7 @@ function shortBytes(text) {
   var n = parseFloat(m[1])
   var unit = m[2].charAt(0).toUpperCase()
   if (unit === "B") return Math.round(n) + "B"
-  return (n >= 100 ? Math.round(n) : n >= 10 ? n.toFixed(1) : n.toFixed(2)).toString().replace(/\.?0+$/, "") + unit
+  return trimZeros(n >= 100 ? Math.round(n) : n >= 10 ? n.toFixed(1) : n.toFixed(2)) + unit
 }
 
 function cpuText(container) {
@@ -397,10 +404,52 @@ function shellQuote(value) {
 
 var HISTORY_LENGTH = 20
 
-// Append this poll's CPU% and memory bytes for every running container with
-// stats, drop containers that vanished, cap each series. Returns a new map
-// ("host/id" -> {cpu: [], mem: []}) so QML bindings see the change.
-function pushHistory(history, hosts) {
+// Metrics a sparkline can follow. `key` is the series name in a history
+// entry, `ceiling` pins the chart top (0 = the series' own peak), `rate`
+// marks cumulative counters that are turned into per-second deltas.
+var METRICS = {
+  CPU:     { key: "cpu",  glyph: "󰘚", ceiling: 100, rate: false },
+  Memory:  { key: "mem",  glyph: "󰍛", ceiling: 0,   rate: false },
+  Network: { key: "net",  glyph: "󰛳", ceiling: 0,   rate: true },
+  Disk:    { key: "disk", glyph: "󰋊", ceiling: 0,   rate: true },
+  PIDs:    { key: "pids", glyph: "󰓹", ceiling: 0,   rate: false }
+}
+var METRIC_NAMES = ["CPU", "Memory", "Network", "Disk", "PIDs"]
+
+// docker's I/O counters use SI units ("2.61kB", "1.2MB", "3GB"); memory uses
+// binary ones ("20.7MiB"). Accept both, and "12B".
+function ioBytes(text) {
+  var m = /^([\d.]+)\s*([kKMGT]?)(i?)B$/.exec(String(text || "").trim())
+  if (!m) return -1
+  var order = { "": 0, K: 1, M: 2, G: 3, T: 4 }[m[2].toUpperCase()]
+  return parseFloat(m[1]) * Math.pow(m[3] ? 1024 : 1000, order)
+}
+
+// "1.2kB / 3.4MB" -> total bytes both ways, or -1.
+function ioTotal(text) {
+  var parts = String(text || "").split("/")
+  if (parts.length !== 2) return -1
+  var a = ioBytes(parts[0]), b = ioBytes(parts[1])
+  return a < 0 || b < 0 ? -1 : a + b
+}
+
+function emptySeries() {
+  return { cpu: [], mem: [], net: [], disk: [], pids: [], lastNet: -1, lastDisk: -1, lastAt: -1 }
+}
+
+function pushCapped(list, value, max) {
+  list.push(value)
+  while (list.length > max) list.shift()
+}
+
+// Append this poll's samples for every running container with stats, drop
+// containers that vanished, cap each series at `maxLen`. Network and disk
+// are cumulative counters in `docker stats`, so they are stored as bytes per
+// second since the previous poll. Returns a new map ("host/id" -> series) so
+// QML bindings see the change.
+function pushHistory(history, hosts, maxLen, nowMs) {
+  var cap = maxLen > 1 ? maxLen : HISTORY_LENGTH
+  var now = typeof nowMs === "number" && isFinite(nowMs) ? nowMs : Date.now()
   var next = {}
   var prev = history || {}
   for (var h = 0; h < (hosts || []).length; h++) {
@@ -408,15 +457,26 @@ function pushHistory(history, hosts) {
     for (var c = 0; c < host.containers.length; c++) {
       var k = host.containers[c]
       var key = host.name + "/" + k.id
-      var series = prev[key] ? { cpu: prev[key].cpu.slice(), mem: prev[key].mem.slice() } : { cpu: [], mem: [] }
+      var series = emptySeries()
+      if (prev[key]) {
+        for (var f in series) series[f] = prev[key][f] instanceof Array ? prev[key][f].slice() : prev[key][f]
+      }
       if (k.running && k.stats) {
-        series.cpu.push(k.stats.cpu < 0 ? 0 : k.stats.cpu)
-        series.mem.push(Math.max(0, memBytes(k.stats.memUsed)))
-        if (series.cpu.length > HISTORY_LENGTH) series.cpu.shift()
-        if (series.mem.length > HISTORY_LENGTH) series.mem.shift()
+        pushCapped(series.cpu, k.stats.cpu < 0 ? 0 : k.stats.cpu, cap)
+        pushCapped(series.mem, Math.max(0, memBytes(k.stats.memUsed)), cap)
+        pushCapped(series.pids, k.stats.pids, cap)
+        var net = ioTotal(k.stats.netIO), disk = ioTotal(k.stats.blockIO)
+        var dt = series.lastAt >= 0 ? (now - series.lastAt) / 1000 : 0
+        if (dt > 0) {
+          pushCapped(series.net, net >= 0 && series.lastNet >= 0 ? Math.max(0, (net - series.lastNet) / dt) : 0, cap)
+          pushCapped(series.disk, disk >= 0 && series.lastDisk >= 0 ? Math.max(0, (disk - series.lastDisk) / dt) : 0, cap)
+        }
+        series.lastNet = net
+        series.lastDisk = disk
+        series.lastAt = now
       } else if (!k.running) {
         // A stopped container starts a fresh line when it comes back.
-        series = { cpu: [], mem: [] }
+        series = emptySeries()
       }
       next[key] = series
     }
@@ -426,16 +486,16 @@ function pushHistory(history, hosts) {
 
 // Normalised points for a sparkline: [{x: 0..1, y: 0..1}] with y = 1 at the
 // series maximum (or at `ceiling` when higher, so CPU never flatlines at 3%).
-function sparkPoints(series, ceiling) {
+// `slots` is how many samples fill the width; the newest sits at x = 1.
+function sparkPoints(series, ceiling, slots) {
   var values = series || []
   if (values.length === 0) return []
   var max = ceiling || 0
   for (var i = 0; i < values.length; i++) if (values[i] > max) max = values[i]
   if (max <= 0) max = 1
-  var n = Math.max(values.length, HISTORY_LENGTH)
+  var n = Math.max(values.length, slots || HISTORY_LENGTH, 2)
   var out = []
   for (var j = 0; j < values.length; j++) {
-    // Right-align: the newest sample sits at x = 1, history grows leftwards.
     out.push({ x: (n - values.length + j) / (n - 1), y: values[j] / max })
   }
   return out
@@ -458,16 +518,61 @@ function bytesText(n) {
   var units = ["B", "K", "M", "G", "T"]
   var i = 0
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
-  return (n >= 100 || i === 0 ? Math.round(n) : n >= 10 ? n.toFixed(1) : n.toFixed(2)).toString().replace(/\.?0+$/, "") + units[i]
+  return trimZeros(n >= 100 || i === 0 ? Math.round(n) : n >= 10 ? n.toFixed(1) : n.toFixed(2)) + units[i]
 }
 
-function historyTooltip(series) {
+function rateText(n) {
+  return n >= 0 ? bytesText(n) + "/s" : "–"
+}
+
+function metricValueText(name, value) {
+  if (name === "CPU") return formatPercent(value)
+  if (name === "Memory") return bytesText(value)
+  if (name === "Network" || name === "Disk") return rateText(value)
+  return value >= 0 ? String(Math.round(value)) : "–"
+}
+
+// Current reading for a metric: from the stats row for instantaneous ones,
+// from the newest history sample for rates.
+function metricCurrent(name, container, series) {
+  if (!container || !container.stats) return -1
+  if (name === "CPU") return container.stats.cpu
+  if (name === "Memory") return memBytes(container.stats.memUsed)
+  if (name === "PIDs") return container.stats.pids
+  var list = series ? series[METRICS[name].key] : null
+  return list && list.length > 0 ? list[list.length - 1] : -1
+}
+
+// Compact metric line, e.g. "󰘚 0.4%" or "󰛳 12K/s".
+function metricLabel(name, container, series) {
+  var m = METRICS[name]
+  if (!m) return ""
+  return m.glyph + " " + metricValueText(name, metricCurrent(name, container, series))
+}
+
+function windowText(count, intervalSec) {
+  var secs = Math.max(0, count - 1) * (intervalSec || 0)
+  if (secs <= 0) return count + " polls"
+  var span = secs >= 3600 ? (secs / 3600).toFixed(1).replace(/\.0$/, "") + " h" : secs >= 60 ? Math.round(secs / 60) + " min" : Math.round(secs) + " s"
+  return count + " polls · " + span
+}
+
+function historyTooltip(series, names, intervalSec) {
   if (!series) return ""
-  var cpu = seriesStats(series.cpu)
-  var mem = seriesStats(series.mem)
-  if (!cpu || !mem) return ""
-  return "Last " + cpu.count + " polls\nCPU  min " + formatPercent(cpu.min) + " · avg " + formatPercent(cpu.avg) + " · max " + formatPercent(cpu.max)
-    + "\nMem  min " + bytesText(mem.min) + " · avg " + bytesText(mem.avg) + " · max " + bytesText(mem.max)
+  var lines = []
+  var count = 0
+  var list = names && names.length ? names : ["CPU", "Memory"]
+  for (var i = 0; i < list.length; i++) {
+    var m = METRICS[list[i]]
+    if (!m) continue
+    var st = seriesStats(series[m.key])
+    if (!st) continue
+    count = Math.max(count, st.count)
+    var pad = (list[i] + "      ").substring(0, 8)
+    lines.push(pad + "min " + metricValueText(list[i], st.min) + " · avg " + metricValueText(list[i], st.avg) + " · max " + metricValueText(list[i], st.max))
+  }
+  if (lines.length === 0) return ""
+  return "Last " + windowText(count, intervalSec) + "\n" + lines.join("\n")
 }
 
 // ---- change detection (notifications) ---------------------------------------
@@ -573,6 +678,8 @@ if (typeof module !== "undefined") {
     publishedPorts: publishedPorts, hostAddress: hostAddress, portUrl: portUrl,
     sortContainers: sortContainers, nextSortMode: nextSortMode, memBytes: memBytes, SORT_MODES: SORT_MODES,
     pushHistory: pushHistory, sparkPoints: sparkPoints, seriesStats: seriesStats, bytesText: bytesText, historyTooltip: historyTooltip, HISTORY_LENGTH: HISTORY_LENGTH,
+    METRICS: METRICS, METRIC_NAMES: METRIC_NAMES, ioBytes: ioBytes, ioTotal: ioTotal, rateText: rateText, metricValueText: metricValueText,
+    metricCurrent: metricCurrent, metricLabel: metricLabel, windowText: windowText,
     matchesQuery: matchesQuery, filterContainers: filterContainers, groupContainers: groupContainers, groupKey: groupKey, groupSummary: groupSummary,
     sshArgv: sshArgv, shellQuote: shellQuote, snapshot: snapshot, diffSnapshots: diffSnapshots
   }

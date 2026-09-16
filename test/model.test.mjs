@@ -169,33 +169,67 @@ test("sorting modes", () => {
 });
 
 test("stats history and sparklines", () => {
-  const run = (cpu, mem) => ({ name: "d", containers: [Model.normalizeContainer(psRow({ Stats: { CPUPerc: cpu + "%", MemUsage: mem + " / 1GiB", MemPerc: "0%", NetIO: "", BlockIO: "", PIDs: "1" } }))] });
-  let h = Model.pushHistory({}, [run(1, "10MiB")]);
-  h = Model.pushHistory(h, [run(3, "20MiB")]);
+  const run = (cpu, mem, net = "0B / 0B", disk = "0B / 0B", pids = "1") => ({ name: "d", containers: [Model.normalizeContainer(psRow({ Stats: { CPUPerc: cpu + "%", MemUsage: mem + " / 1GiB", MemPerc: "0%", NetIO: net, BlockIO: disk, PIDs: pids } }))] });
   const key = "d/" + psRow().ID;
+  let h = Model.pushHistory({}, [run(1, "10MiB", "1kB / 0B")], 20, 0);
+  h = Model.pushHistory(h, [run(3, "20MiB", "3kB / 2kB", "1MB / 0B", "7")], 20, 10000);
   assert.deepEqual(h[key].cpu, [1, 3]);
   assert.deepEqual(h[key].mem, [10 * 1048576, 20 * 1048576]);
-  for (let i = 0; i < 30; i++) h = Model.pushHistory(h, [run(i, "1MiB")]);
-  assert.equal(h[key].cpu.length, Model.HISTORY_LENGTH);
+  assert.deepEqual(h[key].pids, [1, 7]);
+  // (3kB + 2kB) - 1kB over 10 s = 400 B/s; disk 1MB over 10 s
+  assert.deepEqual(h[key].net, [400]);
+  assert.deepEqual(h[key].disk, [100000]);
+  for (let i = 0; i < 30; i++) h = Model.pushHistory(h, [run(i, "1MiB")], 12, 20000 + i * 1000);
+  assert.equal(h[key].cpu.length, 12, "capped at maxLen");
   // A stopped container resets its line; a vanished one is dropped.
   const stopped = { name: "d", containers: [Model.normalizeContainer(psRow({ State: "exited", Stats: null }))] };
   assert.deepEqual(Model.pushHistory(h, [stopped])[key].cpu, []);
   assert.deepEqual(Object.keys(Model.pushHistory(h, [{ name: "d", containers: [] }])), []);
 
-  const pts = Model.sparkPoints([0, 5, 10], 0);
+  const pts = Model.sparkPoints([0, 5, 10], 0, 20);
   assert.equal(pts.length, 3);
   assert.equal(pts[2].x, 1);
   assert.equal(pts[2].y, 1);
   assert.equal(pts[0].y, 0);
-  assert.equal(Model.sparkPoints([2, 3], 100)[1].y, 0.03, "ceiling keeps small CPU values low");
-  assert.deepEqual(Model.sparkPoints([], 0), []);
+  assert.equal(Model.sparkPoints([2, 3], 100, 20)[1].y, 0.03, "ceiling keeps small CPU values low");
+  assert.deepEqual(Model.sparkPoints([], 0, 20), []);
 
   assert.deepEqual(Model.seriesStats([1, 2, 3]), { min: 1, max: 3, avg: 2, count: 3 });
   assert.equal(Model.seriesStats([]), null);
+});
+
+test("metric formatting and byte units", () => {
+  assert.equal(Model.ioBytes("2.61kB"), 2610);
+  assert.equal(Model.ioBytes("1.5MB"), 1500000);
+  assert.equal(Model.ioBytes("20MiB"), 20 * 1048576);
+  assert.equal(Model.ioBytes("12B"), 12);
+  assert.equal(Model.ioBytes("nope"), -1);
+  assert.equal(Model.ioTotal("1kB / 2kB"), 3000);
+  assert.equal(Model.ioTotal("garbage"), -1);
   assert.equal(Model.bytesText(20 * 1048576), "20M");
   assert.equal(Model.bytesText(1.5 * 1073741824), "1.5G");
   assert.equal(Model.bytesText(512), "512B");
-  assert.match(Model.historyTooltip(h[key]), /Last 20 polls\nCPU  min/);
+  assert.equal(Model.bytesText(0), "0B");
+  assert.equal(Model.bytesText(100 * 1048576), "100M");
+  assert.equal(Model.bytesText(10 * 1024), "10K");
+  assert.equal(Model.shortBytes("100MiB"), "100M");
+  assert.equal(Model.shortBytes("10.0MiB"), "10M");
+  assert.equal(Model.formatPercent(10), "10%");
+  assert.equal(Model.formatPercent(100), "100%");
+  assert.equal(Model.rateText(0), "0B/s");
+  assert.equal(Model.rateText(2048), "2K/s");
+  assert.equal(Model.metricValueText("CPU", 12.34), "12.3%");
+  assert.equal(Model.metricValueText("PIDs", 7.2), "7");
+  assert.equal(Model.metricValueText("Network", -1), "–");
+  const c = Model.normalizeContainer(psRow({ Stats: { CPUPerc: "5%", MemUsage: "10MiB / 1GiB", MemPerc: "1%", NetIO: "0B / 0B", BlockIO: "0B / 0B", PIDs: "3" } }));
+  assert.equal(Model.metricLabel("CPU", c, null), "󰘚 5%");
+  assert.equal(Model.metricLabel("Memory", c, null), "󰍛 10M");
+  assert.equal(Model.metricLabel("Network", c, { net: [1024] }), "󰛳 1K/s");
+  assert.equal(Model.metricLabel("Network", c, null), "󰛳 –");
+  assert.equal(Model.windowText(20, 15), "20 polls · 5 min");
+  assert.equal(Model.windowText(3, 5), "3 polls · 10 s");
+  assert.equal(Model.windowText(60, 60), "60 polls · 59 min");
+  assert.match(Model.historyTooltip({ cpu: [1, 2], mem: [1, 2], net: [], disk: [], pids: [] }, ["CPU", "Network"], 15), /^Last 2 polls · 15 s\nCPU     min 1%/);
 });
 
 test("glyphs", () => {
