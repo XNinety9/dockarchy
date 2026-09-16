@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "x99.dockarchy",
   "name": "Dockarchy",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "XNinety9",
   "license": "WTFPL",
   "description": "Docker container status for local and remote (ssh) hosts in the Omarchy bar, with CPU/memory per container, start/stop/restart, logs and shell access.",
@@ -30,7 +30,9 @@
       "alternateRows": false,
       "groupByProject": true,
       "notifications": "Problems",
-      "sortBy": "State"
+      "sortBy": "State",
+      "showSparklines": true,
+      "runningAccent": false
     },
     "schema": [
       {
@@ -75,6 +77,13 @@
         "label": "Show CPU / memory per container",
         "defaultValue": true,
         "description": "Runs docker stats on each poll (adds about a second)."
+      },
+      {
+        "key": "showSparklines",
+        "type": "boolean",
+        "label": "Show CPU / memory sparklines",
+        "defaultValue": true,
+        "description": "Tiny trend lines over the last 20 polls next to each running container's stats."
       },
       {
         "key": "groupByProject",
@@ -140,6 +149,13 @@
         "label": "Alternate row shading",
         "defaultValue": false,
         "description": "Tint every other container row so neighbours are easy to tell apart."
+      },
+      {
+        "key": "runningAccent",
+        "type": "boolean",
+        "label": "Tint running containers with the accent colour",
+        "defaultValue": false,
+        "description": "Use the theme's accent colour instead of the text colour for running containers."
       }
     ]
   }

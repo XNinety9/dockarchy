@@ -39,6 +39,10 @@ Item {
   readonly property bool showAll: boolSetting("showAll", true)
   readonly property bool showStats: boolSetting("showStats", true)
   readonly property bool groupByProject: boolSetting("groupByProject", true)
+  readonly property bool showSparklines: boolSetting("showSparklines", true)
+  readonly property bool runningAccent: boolSetting("runningAccent", false)
+  // "host/id" -> {cpu: [], mem: []}, the last HISTORY_LENGTH polls.
+  property var history: ({})
   // "Off" | "Problems" | "Problems and recoveries"
   readonly property string notifications: stringSetting("notifications", "Problems")
   readonly property var contexts: listSetting("contexts")
@@ -137,6 +141,7 @@ Item {
     counts = parsed.counts
     everRefreshed = true
     lastError = ""
+    if (showStats) history = Model.pushHistory(history, hosts)
     var snap = Model.snapshot(hosts)
     if (_lastSnapshot) notifyChanges(Model.diffSnapshots(_lastSnapshot, snap, currentUserTouched()))
     _lastSnapshot = snap
@@ -192,6 +197,12 @@ Item {
       }
     }
     return null
+  }
+
+  function historyFor(host, container) {
+    if (!host || !container) return null
+    var series = history[String(host.name) + "/" + String(container.id)]
+    return series && series.cpu.length > 1 ? series : null
   }
 
   function actionKey(host, container) {

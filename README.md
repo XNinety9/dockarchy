@@ -106,7 +106,7 @@ logs, shell — still go through `docker --context`, which is a single request.
 | Project row   | Click to fold/unfold · buttons: project logs · restart · start/stop all |
 | Container row | Buttons: logs · shell · restart · start/stop · middle-click copies the name · **right-click opens the menu** |
 | Port chip     | `8080→80` under the name: click opens `http://<host>:8080` in your browser |
-| Stats column  | Hover for memory limit, network I/O, disk I/O and PIDs                 |
+| Stats column  | Sparklines of the last 20 polls next to CPU % and memory; hover for memory limit, network/disk I/O, PIDs, and min/avg/max over the window |
 
 The **context menu** (right-click or `m`) gathers everything for one container:
 open each published port, logs, shell, inspect (`docker inspect | less`),
@@ -181,6 +181,7 @@ them there, in the shell's settings UI, or with
 | `timeoutSec`         | `10`        | Per-host limit before it is marked unreachable.                    |
 | `showAll`            | `true`      | Include stopped containers (`docker ps -a`).                       |
 | `showStats`          | `true`      | CPU % and memory per running container (`docker stats`, about a second extra per poll). |
+| `showSparklines`     | `true`      | Trend lines over the last 20 polls next to the stats. CPU is scaled to 100 %, memory to its own peak. |
 | `groupByProject`     | `true`      | Fold containers under their Compose project with project-level actions. |
 | `sortBy`             | `State`     | `State` (running first, then name), `Name`, `CPU` or `Memory` (hungriest first). `t` cycles it. |
 | `collapsedHosts`, `collapsedGroups`, `hideStoppedHosts` | *(empty)* | Comma-separated lists written by the panel itself as you fold or hide things. |
@@ -189,6 +190,7 @@ them there, in the shell's settings UI, or with
 | `panelWidth`         | `700`       | Popup width in px (300–1400).                                      |
 | `panelMaxHeight`     | `800`       | The popup grows with its content up to this, then scrolls.        |
 | `alternateRows`      | `false`     | Shade every other container row.                                   |
+| `runningAccent`      | `false`     | Tint running containers with the theme's accent colour instead of the text colour. |
 
 ### Bar label template
 
@@ -226,6 +228,7 @@ omarchy-shell x99.dockarchy sort <State|Name|CPU|Memory|next>
 omarchy-shell x99.dockarchy version
 omarchy-shell x99.dockarchy settings    # resolved settings, for debugging
 omarchy-shell x99.dockarchy rows        # what the panel currently lists, for debugging
+omarchy-shell x99.dockarchy history <context> <name|id>   # the sparkline series
 ```
 
 Handy for a Hyprland keybinding in `~/.config/hypr/bindings.lua`:
@@ -282,6 +285,8 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
+- **0.6.0** — CPU and memory sparklines over the last 20 polls, with
+  min/avg/max in the tooltip; optional accent tint for running containers.
 - **0.5.0** — clickable port chips and `o`; right-click / `m` context menu with
   inspect, copy ID, kill and remove behind a confirmation (`x`); host rows fold
   and can hide their stopped containers (`h`), remembered across restarts;

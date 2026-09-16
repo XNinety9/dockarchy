@@ -393,6 +393,83 @@ function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'"
 }
 
+// ---- stats history (sparklines) --------------------------------------------
+
+var HISTORY_LENGTH = 20
+
+// Append this poll's CPU% and memory bytes for every running container with
+// stats, drop containers that vanished, cap each series. Returns a new map
+// ("host/id" -> {cpu: [], mem: []}) so QML bindings see the change.
+function pushHistory(history, hosts) {
+  var next = {}
+  var prev = history || {}
+  for (var h = 0; h < (hosts || []).length; h++) {
+    var host = hosts[h]
+    for (var c = 0; c < host.containers.length; c++) {
+      var k = host.containers[c]
+      var key = host.name + "/" + k.id
+      var series = prev[key] ? { cpu: prev[key].cpu.slice(), mem: prev[key].mem.slice() } : { cpu: [], mem: [] }
+      if (k.running && k.stats) {
+        series.cpu.push(k.stats.cpu < 0 ? 0 : k.stats.cpu)
+        series.mem.push(Math.max(0, memBytes(k.stats.memUsed)))
+        if (series.cpu.length > HISTORY_LENGTH) series.cpu.shift()
+        if (series.mem.length > HISTORY_LENGTH) series.mem.shift()
+      } else if (!k.running) {
+        // A stopped container starts a fresh line when it comes back.
+        series = { cpu: [], mem: [] }
+      }
+      next[key] = series
+    }
+  }
+  return next
+}
+
+// Normalised points for a sparkline: [{x: 0..1, y: 0..1}] with y = 1 at the
+// series maximum (or at `ceiling` when higher, so CPU never flatlines at 3%).
+function sparkPoints(series, ceiling) {
+  var values = series || []
+  if (values.length === 0) return []
+  var max = ceiling || 0
+  for (var i = 0; i < values.length; i++) if (values[i] > max) max = values[i]
+  if (max <= 0) max = 1
+  var n = Math.max(values.length, HISTORY_LENGTH)
+  var out = []
+  for (var j = 0; j < values.length; j++) {
+    // Right-align: the newest sample sits at x = 1, history grows leftwards.
+    out.push({ x: (n - values.length + j) / (n - 1), y: values[j] / max })
+  }
+  return out
+}
+
+function seriesStats(series) {
+  var values = series || []
+  if (values.length === 0) return null
+  var min = values[0], max = values[0], sum = 0
+  for (var i = 0; i < values.length; i++) {
+    if (values[i] < min) min = values[i]
+    if (values[i] > max) max = values[i]
+    sum += values[i]
+  }
+  return { min: min, max: max, avg: sum / values.length, count: values.length }
+}
+
+function bytesText(n) {
+  if (!(n >= 0)) return "–"
+  var units = ["B", "K", "M", "G", "T"]
+  var i = 0
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
+  return (n >= 100 || i === 0 ? Math.round(n) : n >= 10 ? n.toFixed(1) : n.toFixed(2)).toString().replace(/\.?0+$/, "") + units[i]
+}
+
+function historyTooltip(series) {
+  if (!series) return ""
+  var cpu = seriesStats(series.cpu)
+  var mem = seriesStats(series.mem)
+  if (!cpu || !mem) return ""
+  return "Last " + cpu.count + " polls\nCPU  min " + formatPercent(cpu.min) + " · avg " + formatPercent(cpu.avg) + " · max " + formatPercent(cpu.max)
+    + "\nMem  min " + bytesText(mem.min) + " · avg " + bytesText(mem.avg) + " · max " + bytesText(mem.max)
+}
+
 // ---- change detection (notifications) ---------------------------------------
 
 // Snapshot the bits of state worth alerting on, keyed so two polls can be
@@ -495,6 +572,7 @@ if (typeof module !== "undefined") {
     formatBar: formatBar, normalizeStats: normalizeStats, formatPercent: formatPercent, shortBytes: shortBytes, statsTooltip: statsTooltip,
     publishedPorts: publishedPorts, hostAddress: hostAddress, portUrl: portUrl,
     sortContainers: sortContainers, nextSortMode: nextSortMode, memBytes: memBytes, SORT_MODES: SORT_MODES,
+    pushHistory: pushHistory, sparkPoints: sparkPoints, seriesStats: seriesStats, bytesText: bytesText, historyTooltip: historyTooltip, HISTORY_LENGTH: HISTORY_LENGTH,
     matchesQuery: matchesQuery, filterContainers: filterContainers, groupContainers: groupContainers, groupKey: groupKey, groupSummary: groupSummary,
     sshArgv: sshArgv, shellQuote: shellQuote, snapshot: snapshot, diffSnapshots: diffSnapshots
   }

@@ -74,6 +74,9 @@ Panel {
   readonly property int panelMaxHeight: docker.intSetting("panelMaxHeight", 800, 300, 1600)
   readonly property bool alternateRows: docker.boolSetting("alternateRows", false)
   readonly property color stripeFill: Util.alpha(foreground, 0.05)
+  // Optional theme-accent tint for running containers, for themes where text
+  // and dim are too close to tell apart at a glance.
+  readonly property color runningColor: docker.runningAccent ? Color.accent : foreground
   readonly property bool alarming: docker.everRefreshed && !docker.healthy
   readonly property color barIconColor: docker.installed && docker.counts.running > 0 ? barForeground : Qt.darker(barForeground, 1.55)
   readonly property bool filtering: query.trim() !== ""
@@ -328,7 +331,7 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { docker.refresh(); return "ok" }
     function status(): string { return docker.summaryText }
-    function version(): string { return "0.5.0" }
+    function version(): string { return "0.6.0" }
     function running(): string { return String(docker.counts.running) }
     function settings(): string { return JSON.stringify({ settings: root.settings, contexts: docker.contexts }) }
     function rows(): string {
@@ -344,6 +347,13 @@ Panel {
       return out.join("\n")
     }
     function search(text: string): string { root.open(); root.query = text; root.openSearch(); return "ok" }
+    function history(context: string, container: string): string {
+      var found = docker.findContainer(context, container)
+      if (!found) return "unknown container: " + context + "/" + container
+      var series = docker.historyFor(found.host, found.container)
+      if (!series) return "no history yet"
+      return "cpu " + JSON.stringify(series.cpu) + "\nmem " + JSON.stringify(series.mem.map(Model.bytesText))
+    }
     // omarchy-shell x99.dockarchy sort <State|Name|CPU|Memory|next>
     function sort(mode: string): string {
       var next = mode === "next" ? Model.nextSortMode(root.sortBy) : mode
@@ -990,11 +1000,12 @@ Panel {
     readonly property string key: host && container ? String(host.name) + "/" + String(container.id) : ""
     readonly property int flatIndex: key !== "" ? root.rowIndexOf(key) : -1
     readonly property bool pending: docker.isPending(host, container) || docker.isGroupPending(host, group)
+    readonly property var history: docker.historyFor(host, container)
     readonly property bool unhealthy: container && (container.health === "unhealthy" || container.state === "dead")
     readonly property color stateColor: {
       if (!container) return root.dim
       if (unhealthy) return root.warning
-      if (container.running) return root.foreground
+      if (container.running) return root.runningColor
       return root.dim
     }
     readonly property string statusText: {
@@ -1154,7 +1165,7 @@ Panel {
           textFormat: Text.PlainText
           Layout.fillWidth: true
           text: row.container ? row.container.name : ""
-          color: row.container && row.container.running ? root.foreground : root.dim
+          color: row.container && row.container.running ? root.runningColor : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
           elide: Text.ElideRight
@@ -1210,10 +1221,11 @@ Panel {
 
       Item {
         id: statsColumn
+        readonly property bool sparks: docker.showSparklines && row.history !== null
         visible: docker.showStats && row.container && row.container.running && row.container.stats !== null
         Layout.alignment: Qt.AlignVCenter
-        Layout.preferredWidth: Style.space(58)
-        implicitWidth: Style.space(58)
+        Layout.preferredWidth: Style.space(sparks ? 118 : 58)
+        implicitWidth: Style.space(sparks ? 118 : 58)
         implicitHeight: statsInner.implicitHeight
 
         Column {
@@ -1223,24 +1235,54 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.space(1)
 
-          Text {
-            textFormat: Text.PlainText
+          Row {
             width: parent.width
-            text: "󰘚 " + Model.cpuText(row.container)
-            color: row.container && row.container.stats && row.container.stats.cpu >= 80 ? root.warning : root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignRight
+            spacing: Style.space(6)
+            layoutDirection: Qt.RightToLeft
+
+            Text {
+              textFormat: Text.PlainText
+              width: Style.space(58)
+              text: "󰘚 " + Model.cpuText(row.container)
+              color: row.container && row.container.stats && row.container.stats.cpu >= 80 ? root.warning : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignRight
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Sparkline {
+              visible: statsColumn.sparks
+              series: row.history ? row.history.cpu : []
+              ceiling: 100
+              hot: row.container && row.container.stats && row.container.stats.cpu >= 80
+              anchors.verticalCenter: parent.verticalCenter
+            }
           }
 
-          Text {
-            textFormat: Text.PlainText
+          Row {
             width: parent.width
-            text: "󰍛 " + Model.memText(row.container)
-            color: row.container && row.container.stats && row.container.stats.memPerc >= 80 ? root.warning : root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            horizontalAlignment: Text.AlignRight
+            spacing: Style.space(6)
+            layoutDirection: Qt.RightToLeft
+
+            Text {
+              textFormat: Text.PlainText
+              width: Style.space(58)
+              text: "󰍛 " + Model.memText(row.container)
+              color: row.container && row.container.stats && row.container.stats.memPerc >= 80 ? root.warning : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignRight
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Sparkline {
+              visible: statsColumn.sparks
+              series: row.history ? row.history.mem : []
+              ceiling: 0
+              hot: row.container && row.container.stats && row.container.stats.memPerc >= 80
+              anchors.verticalCenter: parent.verticalCenter
+            }
           }
         }
 
@@ -1253,7 +1295,7 @@ Panel {
 
         PanelToolTip {
           visible: statsMouse.containsMouse
-          text: Model.statsTooltip(row.container)
+          text: Model.statsTooltip(row.container) + (row.history ? "\n\n" + Model.historyTooltip(row.history) : "")
           fontFamily: root.fontFamily
         }
       }
@@ -1375,6 +1417,44 @@ Panel {
         font.pixelSize: Style.font.body
         elide: Text.ElideMiddle
       }
+    }
+  }
+
+  // Tiny line chart of one stats series; newest sample on the right.
+  component Sparkline: Canvas {
+    id: spark
+    property var series: []
+    property real ceiling: 0
+    property bool hot: false
+    readonly property color lineColor: hot ? root.warning : root.dim
+    width: Style.space(48)
+    height: Style.space(12)
+    antialiasing: true
+    onSeriesChanged: requestPaint()
+    onLineColorChanged: requestPaint()
+    onWidthChanged: requestPaint()
+    onPaint: {
+      var ctx = getContext("2d")
+      ctx.reset()
+      var pts = Model.sparkPoints(series, ceiling)
+      if (pts.length < 2) return
+      var w = width, h = height, pad = 1
+      ctx.beginPath()
+      for (var i = 0; i < pts.length; i++) {
+        var x = pad + pts[i].x * (w - 2 * pad)
+        var y = pad + (1 - pts[i].y) * (h - 2 * pad)
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+      }
+      ctx.lineWidth = 1.2
+      ctx.strokeStyle = lineColor
+      ctx.lineJoin = "round"
+      ctx.stroke()
+      // Soft fill under the line, faded so it reads as a hint not a bar.
+      ctx.lineTo(pad + pts[pts.length - 1].x * (w - 2 * pad), h - pad)
+      ctx.lineTo(pad + pts[0].x * (w - 2 * pad), h - pad)
+      ctx.closePath()
+      ctx.fillStyle = Qt.rgba(lineColor.r, lineColor.g, lineColor.b, 0.18)
+      ctx.fill()
     }
   }
 }
