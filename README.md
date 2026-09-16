@@ -9,28 +9,7 @@ polls all of them in parallel and shows one section per host, with CPU and
 memory per container, and lets you start, stop, restart, tail logs or open a
 shell without leaving the bar.
 
-```
- 󰡨 27                ← bar: whale + configurable label (default: running count)
-
-┌ Docker ────────────────────────────────────────────── 󰑐 󰆍 ┐
-│ 27 running · 1 stopped · 1 unhealthy · 2 hosts                  │
-│                                                                 │
-│ 󰌢 DEFAULT                                             1/2   󰆍 │
-│   unix:///var/run/docker.sock                                   │
-│   󰐊 web            nginx:alpine · 8080->80      󰘚 0.4%  󰈙 󰆍 󰑐 󰓛 │
-│                    Up 3 hours (healthy)         󰍛 21M           │
-│   󰓛 worker         alpine                                    󰐊 │
-│                    Exited (0) 2 days ago                        │
-│                                                                 │
-│ 󰒋 MAINSERV                                           26/26  󰆍 │
-│   ssh://x99@mainserv                                            │
-│   󰐊 jellyfin       jellyfin/jellyfin · 8096->8096  󰘚 2.1%  󰈙 󰆍 󰑐 󰓛 │
-│                    media · Up 5 days            󰍛 412M          │
-│   …                                                             │
-├─────────────────────────────────────────────────────────────────┤
-│  j/k move · ⏎ start/stop · l logs · r restart · s shell · …     │
-└─────────────────────────────────────────────────────────────────┘
-```
+![Dockarchy panel showing containers on two hosts](docs/screenshot.png)
 
 ## Requirements
 
@@ -207,6 +186,17 @@ bin/dockarchy-contexts  lists context names for the settings picker
 
 `bin/dockarchy-status --all --stats --timeout 5 [ctx ...] | jq .` shows exactly
 what the widget sees.
+
+### Demo stack
+
+[`docs/demo/compose.yml`](docs/demo/compose.yml) starts seven throwaway
+containers covering every state the widget renders — healthy, running,
+unhealthy and exited — grouped under the compose project `demo`:
+
+```bash
+docker compose -f docs/demo/compose.yml up -d
+docker compose -f docs/demo/compose.yml down
+```
 
 ## Developing
 

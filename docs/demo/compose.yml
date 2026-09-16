@@ -1,0 +1,62 @@
+# Demo stack for screenshots and manual testing. Nothing here persists data.
+#
+#   docker compose -f docs/demo/compose.yml up -d
+#   docker compose -f docs/demo/compose.yml down
+#
+# Gives one of each state the widget renders: healthy, plain running,
+# unhealthy, and exited.
+name: demo
+
+services:
+  web:
+    image: nginx:alpine
+    ports: ["8080:80"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  api:
+    image: python:3-alpine
+    command: python -m http.server 8000
+    ports: ["8000:8000"]
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: demo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  cache:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  worker:
+    image: alpine
+    command: sh -c 'while true; do sleep 30; done'
+
+  # Deliberately failing healthcheck -> shows the "unhealthy" state.
+  broken:
+    image: alpine
+    command: sh -c 'while true; do sleep 30; done'
+    healthcheck:
+      test: ["CMD", "false"]
+      interval: 5s
+      timeout: 2s
+      retries: 1
+      start_period: 0s
+
+  # Runs once and exits -> shows the "stopped" state.
+  migrate:
+    image: alpine
+    command: sh -c 'echo migrating; sleep 1'
+    restart: "no"
