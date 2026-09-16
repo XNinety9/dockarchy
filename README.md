@@ -16,8 +16,8 @@ shell without leaving the bar.
 - Omarchy 4.x (the Quickshell-based `omarchy-shell`).
 - `docker` CLI and `jq` locally; `timeout` and `wl-copy` come with Omarchy.
 - Your user must be able to talk to the Docker socket directly. On Omarchy run
-  `omarchy setup security sudoless-docker`, then log out and back in. No sudo or
-  pkexec is required or used by the plugin itself.
+  `omarchy setup security sudoless-docker`, then log out and back in.
+  No sudo or pkexec is required: the plugin never elevates privileges.
 - Optional: `lazydocker` for the terminal buttons on the header, host headers and bar icon.
 - For remote hosts: `ssh <host>` must work non-interactively (keys,
   `~/.ssh/config`), and your remote user must be able to run `docker`.
