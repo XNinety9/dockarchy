@@ -9,7 +9,7 @@ polls all of them in parallel and shows one section per host, with CPU and
 memory per container, and lets you start, stop, restart, tail logs or open a
 shell without leaving the bar.
 
-![Dockarchy panel showing containers on two hosts](docs/screenshot.png)
+![Dockarchy panel](docs/screenshot.png)
 
 ## Requirements
 
@@ -17,7 +17,7 @@ shell without leaving the bar.
 - `docker` CLI and `jq` locally; `timeout` and `wl-copy` come with Omarchy.
 - Access to the local socket without sudo: `omarchy setup security sudoless-docker`,
   then log out and back in.
-- Optional: `lazydocker` for the 󰆍 buttons on the bar icon and host headers.
+- Optional: `lazydocker` for the terminal buttons on the header, host headers and bar icon.
 - For remote hosts: `ssh <host>` must work non-interactively (keys,
   `~/.ssh/config`), and your remote user must be able to run `docker`.
 
@@ -85,9 +85,9 @@ logs, shell — still go through `docker --context`, which is a single request.
 
 | Target        | Mouse                                                                  |
 |---------------|------------------------------------------------------------------------|
-| Header        | 󰑐 refresh · 󰆍 lazydocker                                                |
-| Host header   | 󰆍 lazydocker for that host                                             |
-| Container row | 󰐊 / 󰓛 start / stop · 󰑐 restart · 󰈙 logs · 󰆍 shell · middle-click copies the name |
+| Header        | Refresh button · lazydocker button                                     |
+| Host header   | lazydocker button for that host                                        |
+| Container row | Buttons, left to right: logs · shell · restart · start/stop · middle-click copies the name |
 | Stats column  | Hover for memory limit, network I/O, disk I/O and PIDs                 |
 
 | Key       | Action                                            |
