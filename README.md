@@ -1,7 +1,7 @@
 # Dockarchy
 
-Docker container status in the [Omarchy](https://omarchy.org) bar — for the
-local daemon *and* your remote servers, in one popup.
+Docker (and Podman) container status in the [Omarchy](https://omarchy.org)
+bar — for the local daemon *and* your remote servers, in one popup.
 
 Every host is a plain **Docker context**. The local socket is the `default`
 context; a remote server is a context with an `ssh://` endpoint. Dockarchy
@@ -63,6 +63,20 @@ docker --context mainserv ps        # one-off sanity check
 
 That is all — the widget picks the new context up on its next poll. Remove a
 host with `docker context rm mainserv`.
+
+### Podman
+
+Podman has no contexts, so its hosts are listed in the `podmanHosts` setting:
+`local` for this machine, `user@host` or `user@host:port` for podman over
+ssh (your `~/.ssh/config` applies). They show up as hosts named `podman` and
+`podman@host`, with the same rows, stats, actions and update checks — the
+collector runs `podman ps/stats --format json` on the host and reshapes it,
+and actions use `podman` (locally or through ssh). `podman compose` is used
+for project actions; lazydocker is docker-only and hidden for podman hosts.
+
+```bash
+omarchy bar set x99.dockarchy podmanHosts "local,me@podbox"
+```
 
 ### How remote polling works (and why it matters)
 
@@ -204,7 +218,8 @@ them there, in the shell's settings UI, or with
 
 | Key                  | Default     | Meaning                                                            |
 |----------------------|-------------|--------------------------------------------------------------------|
-| `contexts`           | *(all)*     | Contexts to monitor. The settings UI offers a picker; `omarchy bar set` takes `ctx1,ctx2`. |
+| `contexts`           | *(all)*     | Docker contexts to monitor. The settings UI offers a picker; `omarchy bar set` takes `ctx1,ctx2`. |
+| `podmanHosts`        | *(none)*    | Podman hosts: `local` and/or `user@host[:port]`, comma-separated. |
 | `refreshIntervalSec` | `15`        | Poll interval, 5–3600 s.                                           |
 | `timeoutSec`         | `10`        | Per-host limit before it is marked unreachable.                    |
 | `showAll`            | `true`      | Include stopped containers (`docker ps -a`).                       |
@@ -333,6 +348,8 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
+- **0.8.0** — Podman hosts (`podmanHosts`: local or over ssh) alongside Docker
+  contexts, with the same rows, stats, actions and update checks.
 - **0.7.0** — image update detection by registry digest, with a badge per
   container, pull & recreate for Compose services and projects, `{updates}`
   in the bar label.

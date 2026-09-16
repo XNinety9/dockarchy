@@ -6,7 +6,12 @@
 #   [{ "name": "default", "endpoint": "unix:///var/run/docker.sock",
 #      "ok": true, "error": "", "containers": [ {docker ps json}, ... ] }]
 #
-# Usage: dockarchy-status [--all] [--stats] [--timeout SEC] [context ...]
+# Usage: dockarchy-status [--all] [--stats] [--timeout SEC] [--podman HOSTS] [context ...]
+#
+# --podman takes a comma-separated list of Podman hosts: "local" for this
+# machine's podman, or "[user@]host[:port]" for podman over ssh. They appear as
+# extra hosts named "podman" / "podman@host" with podman:// endpoints, and
+# their JSON is normalised to docker's row shape on the host itself.
 #
 # With --stats each container also carries a "Stats" object from
 # `docker stats --no-stream` (CPUPerc, MemUsage, MemPerc, NetIO, PIDs…), or
@@ -23,6 +28,7 @@ set -uo pipefail
 ALL=""
 STATS=""
 TIMEOUT=10
+PODMAN=""
 CONTEXTS=()
 
 while [[ $# -gt 0 ]]; do
@@ -30,12 +36,13 @@ while [[ $# -gt 0 ]]; do
   --all) ALL="-a"; shift ;;
   --stats) STATS="1"; shift ;;
   --timeout) TIMEOUT="${2:-10}"; shift 2 ;;
+  --podman) PODMAN="${2:-}"; shift 2 ;;
   --) shift; CONTEXTS+=("$@"); break ;;
   *) CONTEXTS+=("$1"); shift ;;
   esac
 done
 
-if ! command -v docker >/dev/null 2>&1; then
+if ! command -v docker >/dev/null 2>&1 && [[ -z $PODMAN ]]; then
   jq -cn '{installed: false, hosts: []}'
   exit 0
 fi
@@ -53,7 +60,22 @@ done < <(docker context ls --format '{{.Name}}\t{{.DockerEndpoint}}' 2>/dev/null
 if [[ ${#CONTEXTS[@]} -eq 0 ]]; then
   CONTEXTS=("${KNOWN[@]}")
 fi
-[[ ${#CONTEXTS[@]} -eq 0 ]] && CONTEXTS=("default")
+[[ ${#CONTEXTS[@]} -eq 0 && -z $PODMAN ]] && CONTEXTS=("default")
+if ! command -v docker >/dev/null 2>&1; then CONTEXTS=(); fi
+
+# Podman hosts become pseudo-contexts; the endpoint scheme tells query() and
+# the widget which engine and transport to use.
+IFS=',' read -ra PODMAN_HOSTS <<<"$PODMAN"
+for ph in "${PODMAN_HOSTS[@]}"; do
+  ph="${ph// /}"
+  [[ -z $ph ]] && continue
+  ph="${ph#ssh://}"
+  if [[ $ph == local || $ph == localhost ]]; then
+    ENDPOINTS["podman"]="podman://local"; CONTEXTS+=("podman")
+  else
+    ENDPOINTS["podman@${ph#*@}"]="podman+ssh://$ph"; CONTEXTS+=("podman@${ph#*@}")
+  fi
+done
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -65,11 +87,27 @@ trap 'rm -rf "$TMP"' EXIT
 # The local socket is driven directly. Both paths print the same two blocks,
 # separated by a marker line: ps JSON lines, then stats JSON lines.
 remote_script() {
-  cat <<REMOTE
+  local engine="${1:-docker}"
+  if [[ $engine == podman ]]; then
+    # podman prints JSON arrays with its own field names; reshape them into
+    # docker's `ps --format '{{json .}}'` rows so the widget has one model.
+    cat <<REMOTE
+podman ps $ALL --format json | jq -c '.[] | {
+  ID: .Id, Names: (.Names | join(",")), Image: .Image, State: .State, Status: .Status,
+  Ports: ((.Ports // []) | map((if .host_ip and .host_ip != "" then .host_ip else "0.0.0.0" end) + ":" + (.host_port|tostring) + "->" + (.container_port|tostring) + "/" + (.protocol // "tcp")) | join(", ")),
+  Labels: ((.Labels // {}) | to_entries | map(.key + "=" + (.value|tostring)) | join(",")),
+  CreatedAt: (.CreatedAt // "")
+}' || exit 9
+echo __DOCKARCHY_STATS__
+${STATS:+podman stats --no-stream --format json 2>/dev/null | jq -c '.[] | {ID: .id, Name: .name, CPUPerc: .cpu_percent, MemUsage: .mem_usage, MemPerc: .mem_percent, NetIO: .net_io, BlockIO: .block_io, PIDs: (.pids|tostring)}' || true}
+REMOTE
+  else
+    cat <<REMOTE
 docker ps $ALL --no-trunc --format '{{json .}}' || exit 9
 echo __DOCKARCHY_STATS__
 ${STATS:+docker stats --no-stream --format '{{json .}}' 2>/dev/null || true}
 REMOTE
+  fi
 }
 
 # ssh://[user@]host[:port] -> ssh argv. Everything else about the connection
@@ -91,10 +129,15 @@ query() {
   local endpoint="${ENDPOINTS[$ctx]:-}"
   local raw_out="$TMP/$idx.raw" ps_out="$TMP/$idx.ps" stats_out="$TMP/$idx.stats" err_out="$TMP/$idx.err"
 
-  if [[ $endpoint == ssh://* ]]; then
+  local engine="docker"
+  [[ $endpoint == podman* ]] && engine="podman"
+  if [[ $endpoint == ssh://* || $endpoint == podman+ssh://* ]]; then
     local SSH_ARGV
-    ssh_argv_for "$endpoint"
-    timeout "$TIMEOUT" "${SSH_ARGV[@]}" "bash -s" <<<"$(remote_script)" >"$raw_out" 2>"$err_out"
+    ssh_argv_for "${endpoint#podman+}"
+    timeout "$TIMEOUT" "${SSH_ARGV[@]}" "bash -s" <<<"$(remote_script "$engine")" >"$raw_out" 2>"$err_out"
+    rc=$?
+  elif [[ $engine == podman ]]; then
+    timeout "$TIMEOUT" bash -s <<<"$(remote_script podman)" >"$raw_out" 2>"$err_out"
     rc=$?
   else
     # Non-ssh contexts (unix socket, tcp://) go through the context itself,

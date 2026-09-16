@@ -331,7 +331,7 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { docker.refresh(); return "ok" }
     function status(): string { return docker.summaryText }
-    function version(): string { return "0.7.0" }
+    function version(): string { return "0.8.0" }
     function running(): string { return String(docker.counts.running) }
     function settings(): string { return JSON.stringify({ settings: root.settings, contexts: docker.contexts }) }
     function rows(): string {
@@ -844,7 +844,7 @@ Panel {
           textFormat: Text.PlainText
           Layout.fillWidth: true
           visible: hostRow.host && hostRow.host.endpoint !== ""
-          text: hostRow.host ? hostRow.host.endpoint : ""
+          text: Model.endpointText(hostRow.host)
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -882,7 +882,7 @@ Panel {
         tooltipText: "lazydocker on " + hostRow.hostName
         foreground: root.foreground
         fontFamily: root.fontFamily
-        visible: hostRow.host && hostRow.host.ok
+        visible: hostRow.host && hostRow.host.ok && hostRow.host.engine !== "podman"
         onClicked: docker.openLazydocker(hostRow.host)
       }
     }
@@ -1056,6 +1056,7 @@ Panel {
       items.push({ icon: container.running ? "󰓛" : "󰐊", label: container.running ? "Stop" : "Start", kind: "toggle" })
       items.push({ icon: "󰆏", label: "Copy name", kind: "copy-name" })
       items.push({ icon: "󰆏", label: "Copy ID  " + container.shortId, kind: "copy-id" })
+      if (host && host.engine === "podman") items[items.length - 1].label += "  (podman)"
       items.push({ icon: "󰅖", label: container.running ? "Kill…" : "Remove…", kind: "destroy", destructive: true })
       return items
     }

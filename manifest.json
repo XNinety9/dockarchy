@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "x99.dockarchy",
   "name": "Dockarchy",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "author": "XNinety9",
   "license": "WTFPL",
-  "description": "Docker container status for local and remote (ssh) hosts in the Omarchy bar, with CPU/memory per container, start/stop/restart, logs and shell access.",
+  "description": "Docker and Podman container status for local and remote (ssh) hosts in the Omarchy bar: CPU/memory sparklines, Compose projects, start/stop/restart, logs, shell, image updates and notifications.",
   "kinds": [
     "bar-widget"
   ],
@@ -38,7 +38,8 @@
         "Memory"
       ],
       "sparkSamples": 20,
-      "updateCheckHours": 6
+      "updateCheckHours": 6,
+      "podmanHosts": ""
     },
     "schema": [
       {
@@ -51,6 +52,13 @@
         ],
         "defaultValue": [],
         "description": "Which docker contexts to monitor. Leave empty to monitor every context. Add a remote server with: docker context create myserver --docker host=ssh://user@myserver"
+      },
+      {
+        "key": "podmanHosts",
+        "type": "string",
+        "label": "Podman hosts",
+        "defaultValue": "",
+        "description": "Comma-separated: `local` for this machine's podman, `user@host` (or `user@host:port`) for podman over ssh. Shown as extra hosts next to the Docker contexts."
       },
       {
         "key": "refreshIntervalSec",

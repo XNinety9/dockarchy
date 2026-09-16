@@ -55,6 +55,8 @@ Item {
   // "Off" | "Problems" | "Problems and recoveries"
   readonly property string notifications: stringSetting("notifications", "Problems")
   readonly property var contexts: listSetting("contexts")
+  // "local" and/or "[user@]host[:port]" entries polled with podman.
+  readonly property var podmanHosts: listSetting("podmanHosts")
   readonly property bool busy: statusProcess.running || actionProcess.running
   readonly property bool actionRunning: actionProcess.running
   readonly property bool healthy: counts.unhealthy === 0 && counts.unreachable === 0
@@ -176,6 +178,7 @@ Item {
     var cmd = [pluginDir + "/bin/dockarchy-status", "--timeout", String(timeoutSec)]
     if (showAll) cmd.push("--all")
     if (showStats) cmd.push("--stats")
+    if (podmanHosts.length > 0) cmd.push("--podman", podmanHosts.join(","))
     if (contexts.length > 0) {
       cmd.push("--")
       for (var i = 0; i < contexts.length; i++) cmd.push(contexts[i])
@@ -273,6 +276,7 @@ Item {
     checkingUpdates = true
     var cmd = [pluginDir + "/bin/dockarchy-updates", "--timeout", "150",
       "--cache", iconDir + "/updates.json", "--max-age", String(force ? 0 : updateCheckHours * 3600)]
+    if (podmanHosts.length > 0) cmd.push("--podman", podmanHosts.join(","))
     if (contexts.length > 0) { cmd.push("--"); for (var i = 0; i < contexts.length; i++) cmd.push(contexts[i]) }
     updatesProcess.command = cmd
     updatesProcess.running = true
@@ -311,16 +315,18 @@ Item {
     var body
     if (container.project && container.workingDir) {
       var svc = container.service ? " " + Model.shellQuote(container.service) : ""
-      body = "cd " + Model.shellQuote(container.workingDir) + " && docker compose pull" + svc + " && docker compose up -d" + svc
+      var eng = engineName(host)
+      body = "cd " + Model.shellQuote(container.workingDir) + " && " + eng + " compose pull" + svc + " && " + eng + " compose up -d" + svc
     } else {
-      body = "docker pull " + Model.shellQuote(container.image) + " && echo && echo 'Pulled. Recreate " + container.name + " yourself: this container is not managed by compose.'"
+      body = engineName(host) + " pull " + Model.shellQuote(container.image) + " && echo && echo 'Pulled. Recreate " + container.name + " yourself: this container is not managed by compose.'"
     }
     runInTerminalThenRecheck(host, body)
   }
 
   function pullProject(host, group) {
     if (!host || !group || !group.workingDir) return
-    runInTerminalThenRecheck(host, "cd " + Model.shellQuote(group.workingDir) + " && docker compose pull && docker compose up -d")
+    var eng = engineName(host)
+    runInTerminalThenRecheck(host, "cd " + Model.shellQuote(group.workingDir) + " && " + eng + " compose pull && " + eng + " compose up -d")
   }
 
   function runInTerminalThenRecheck(host, body) {
@@ -329,6 +335,8 @@ Item {
     if (ssh) {
       var argv = ssh.slice(0, 1).concat(["-t"]).concat(ssh.slice(1)).concat([body])
       inner = argv.map(Model.shellQuote).join(" ")
+    } else if (engineName(host) === "podman") {
+      inner = "sh -c " + Model.shellQuote(body)
     } else {
       inner = "DOCKER_CONTEXT=" + Model.shellQuote(String(host.name)) + " sh -c " + Model.shellQuote(body)
     }
@@ -362,6 +370,19 @@ Item {
     return key !== "" && key === pendingActionKey
   }
 
+  // argv for a one-shot engine command run from this machine: docker goes
+  // through its context (one request, fine over ssh); podman runs locally or
+  // over the user's ssh config.
+  function engineCommand(host, argv) {
+    var engine = host && host.engine === "podman" ? "podman" : "docker"
+    var ssh = host ? Model.sshArgv(host.endpoint) : null
+    if (engine === "podman") {
+      if (ssh) return ssh.concat([["podman"].concat(argv.map(Model.shellQuote)).join(" ")])
+      return ["podman"].concat(argv)
+    }
+    return ["docker", "--context", String(host.name)].concat(argv)
+  }
+
   function containerAction(host, container, verb) {
     if (!host || !container || actionProcess.running) return
     var allowed = ["start", "stop", "restart", "pause", "unpause", "kill", "rm"]
@@ -372,7 +393,7 @@ Item {
     pendingActionKey = actionKey(host, container)
     markUserTouched(host, [container], verb)
     actionStatus = (verb === "rm" ? "Removing " : verb === "stop" ? "Stopping " : capitalize(verb) + "ing ") + container.name + "…"
-    actionProcess.command = ["timeout", String(Math.max(timeoutSec, 30)), "docker", "--context", String(host.name), verb, String(container.id)]
+    actionProcess.command = ["timeout", String(Math.max(timeoutSec, 30))].concat(engineCommand(host, [verb, String(container.id)]))
     actionProcess.running = true
   }
 
@@ -393,25 +414,30 @@ Item {
     pendingActionKey = groupActionKey(host, group)
     markUserTouched(host, targets, verb)
     actionStatus = capitalize(verb) + "ing " + (group.project || "standalone containers") + " (" + targets.length + ")…"
-    var cmd = ["timeout", String(Math.max(timeoutSec, 60)), "docker", "--context", String(host.name), verb]
-    for (var t = 0; t < targets.length; t++) cmd.push(String(targets[t].id))
-    actionProcess.command = cmd
+    var argv = [verb]
+    for (var t = 0; t < targets.length; t++) argv.push(String(targets[t].id))
+    actionProcess.command = ["timeout", String(Math.max(timeoutSec, 60))].concat(engineCommand(host, argv))
     actionProcess.running = true
   }
 
   // Terminal command for a host: docker is run on the server over the user's
   // ssh config for remote contexts, locally otherwise. `argv` is the docker
   // argv without the leading "docker".
+  function engineName(host) {
+    return host && host.engine === "podman" ? "podman" : "docker"
+  }
+
   function dockerTerminalCommand(host, argv) {
+    var engine = engineName(host)
     var ssh = host ? Model.sshArgv(host.endpoint) : null
     if (ssh) {
-      var quoted = ["docker"]
+      var quoted = [engine]
       for (var i = 0; i < argv.length; i++) quoted.push(Model.shellQuote(argv[i]))
-      // -t so an interactive docker exec gets a TTY through ssh.
+      // -t so an interactive exec gets a TTY through ssh.
       return ssh.slice(0, 1).concat(["-t"]).concat(ssh.slice(1)).concat([quoted.join(" ")])
     }
-    var local = ["docker"]
-    if (host && host.name) local.push("--context", String(host.name))
+    var local = [engine]
+    if (engine === "docker" && host && host.name) local.push("--context", String(host.name))
     return local.concat(argv)
   }
 
@@ -420,7 +446,9 @@ Item {
     if (!host || !container) return
     var ssh = Model.sshArgv(host.endpoint)
     var cmd
-    if (ssh) cmd = ssh.slice(0, 1).concat(["-t"]).concat(ssh.slice(1)).concat(["docker inspect " + Model.shellQuote(String(container.id)) + " | less -R"])
+    var engine = engineName(host)
+    if (ssh) cmd = ssh.slice(0, 1).concat(["-t"]).concat(ssh.slice(1)).concat([engine + " inspect " + Model.shellQuote(String(container.id)) + " | less -R"])
+    else if (engine === "podman") cmd = ["sh", "-c", "podman inspect " + Model.shellQuote(String(container.id)) + " | less -R"]
     else cmd = ["sh", "-c", "docker --context " + Model.shellQuote(String(host.name)) + " inspect " + Model.shellQuote(String(container.id)) + " | less -R"]
     Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.dockarchy-inspect"].concat(cmd))
   }
@@ -469,6 +497,7 @@ Item {
 
   function openLazydocker(host) {
     var cmd = ["omarchy-launch-tui", "--app-id=org.omarchy.lazydocker", "env"]
+    if (host && host.engine === "podman") return
     if (host && host.name) cmd.push("DOCKER_CONTEXT=" + String(host.name))
     cmd.push("lazydocker")
     Quickshell.execDetached(cmd)

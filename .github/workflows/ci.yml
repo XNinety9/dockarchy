@@ -20,7 +20,7 @@ jobs:
           node-version: 22
 
       - name: Shell syntax
-        run: bash -n bin/dockarchy-status bin/dockarchy-contexts bin/dockarchy-menu bin/dockarchy-updates assets/render-icons test/stub/docker test/stub/ssh test/stub/curl
+        run: bash -n bin/dockarchy-status bin/dockarchy-contexts bin/dockarchy-menu bin/dockarchy-updates assets/render-icons test/stub/docker test/stub/podman test/stub/ssh test/stub/curl
 
       - name: Manifest is valid JSON with the required fields
         run: |

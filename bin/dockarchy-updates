@@ -6,7 +6,7 @@
 #   {"hosts":[{"name":"default","ok":true,"error":"","images":[
 #      {"ref":"nginx:alpine","local":"sha256:…","remote":"sha256:…","update":true}]}]}
 #
-# Usage: dockarchy-updates [--timeout SEC] [--cache FILE --max-age SEC] [context ...]
+# Usage: dockarchy-updates [--timeout SEC] [--cache FILE --max-age SEC] [--podman HOSTS] [context ...]
 #
 # With --cache, a result younger than --max-age is printed as is and nothing
 # is queried; otherwise the fresh result is written there. The document then
@@ -23,12 +23,14 @@ set -uo pipefail
 TIMEOUT=120
 CACHE=""
 MAX_AGE=0
+PODMAN=""
 CONTEXTS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
   --timeout) TIMEOUT="${2:-120}"; shift 2 ;;
   --cache) CACHE="$2"; shift 2 ;;
   --max-age) MAX_AGE="${2:-0}"; shift 2 ;;
+  --podman) PODMAN="${2:-}"; shift 2 ;;
   --) shift; CONTEXTS+=("$@"); break ;;
   *) CONTEXTS+=("$1"); shift ;;
   esac
@@ -42,7 +44,7 @@ if [[ -n $CACHE && -s $CACHE && $MAX_AGE -gt 0 ]]; then
   fi
 fi
 
-command -v docker >/dev/null 2>&1 || { jq -cn '{hosts: [], checkedAt: now|floor}'; exit 0; }
+if ! command -v docker >/dev/null 2>&1 && [[ -z $PODMAN ]]; then jq -cn '{hosts: [], checkedAt: now|floor}'; exit 0; fi
 
 declare -A ENDPOINTS=()
 KNOWN=()
@@ -52,13 +54,22 @@ while IFS=$'\t' read -r name endpoint; do
   KNOWN+=("$name")
 done < <(docker context ls --format '{{.Name}}\t{{.DockerEndpoint}}' 2>/dev/null)
 [[ ${#CONTEXTS[@]} -eq 0 ]] && CONTEXTS=("${KNOWN[@]}")
-[[ ${#CONTEXTS[@]} -eq 0 ]] && CONTEXTS=("default")
+[[ ${#CONTEXTS[@]} -eq 0 && -z $PODMAN ]] && CONTEXTS=("default")
+if ! command -v docker >/dev/null 2>&1; then CONTEXTS=(); fi
+IFS=',' read -ra PODMAN_HOSTS <<<"$PODMAN"
+for ph in "${PODMAN_HOSTS[@]}"; do
+  ph="${ph// /}"; [[ -z $ph ]] && continue; ph="${ph#ssh://}"
+  if [[ $ph == local || $ph == localhost ]]; then ENDPOINTS["podman"]="podman://local"; CONTEXTS+=("podman")
+  else ENDPOINTS["podman@${ph#*@}"]="podman+ssh://$ph"; CONTEXTS+=("podman@${ph#*@}"); fi
+done
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# The script executed on each host. It needs docker, curl and jq there.
+# The script executed on each host. It needs the engine, curl and jq there.
 remote_script() {
+  local engine="${1:-docker}"
+  printf 'ENGINE=%s\n' "$engine"
   cat <<'REMOTE'
 set -u
 command -v curl >/dev/null 2>&1 || { echo '{"error":"curl is not installed on this host"}'; exit 0; }
@@ -108,7 +119,7 @@ remote_digest() {
 check_ref() {
   local ref="$1" digests host repo tag local_digest remote match
   [[ -z $ref || $ref == sha256:* ]] && return
-  digests="$(docker image inspect "$ref" --format '{{json .RepoDigests}}' 2>/dev/null)"
+  digests="$("$ENGINE" image inspect "$ref" --format '{{json .RepoDigests}}' 2>/dev/null)"
   [[ -z $digests || $digests == "null" ]] && digests="[]"
   IFS=$'\t' read -r host repo tag < <(split_ref "$ref")
   local_digest="$(jq -r '.[] | select(test("@")) | split("@")[1]' <<<"$digests" | head -1)"
@@ -126,10 +137,10 @@ check_ref() {
   fi
 }
 export -f check_ref split_ref remote_digest
-export ACCEPT
+export ACCEPT ENGINE
 
 # Distinct image references of running containers, a few registries at a time.
-docker ps --format '{{.Image}}' | sort -u | xargs -r -P 6 -I{} bash -c 'check_ref "$1"' _ {}
+"$ENGINE" ps --format '{{.Image}}' | sort -u | xargs -r -P 6 -I{} bash -c 'check_ref "$1"' _ {}
 REMOTE
 }
 
@@ -147,9 +158,12 @@ ssh_argv_for() {
 query() {
   local idx="$1" ctx="$2" rc endpoint="${ENDPOINTS[$ctx]:-}"
   local out="$TMP/$idx.out" err="$TMP/$idx.err"
-  if [[ $endpoint == ssh://* ]]; then
-    local SSH_ARGV; ssh_argv_for "$endpoint"
-    timeout "$TIMEOUT" "${SSH_ARGV[@]}" "bash -s" <<<"$(remote_script)" >"$out" 2>"$err"; rc=$?
+  local engine="docker"; [[ $endpoint == podman* ]] && engine="podman"
+  if [[ $endpoint == ssh://* || $endpoint == podman+ssh://* ]]; then
+    local SSH_ARGV; ssh_argv_for "${endpoint#podman+}"
+    timeout "$TIMEOUT" "${SSH_ARGV[@]}" "bash -s" <<<"$(remote_script "$engine")" >"$out" 2>"$err"; rc=$?
+  elif [[ $engine == podman ]]; then
+    timeout "$TIMEOUT" bash -s <<<"$(remote_script podman)" >"$out" 2>"$err"; rc=$?
   else
     timeout "$TIMEOUT" env DOCKER_CONTEXT="$ctx" bash -s <<<"$(remote_script)" >"$out" 2>"$err"; rc=$?
   fi

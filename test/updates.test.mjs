@@ -36,6 +36,14 @@ test("different registry digest -> update available, on remote hosts too", () =>
   }
 });
 
+test("podman hosts are checked with podman", () => {
+  const doc = run(["--timeout", "20", "--podman", "local"], { DOCKARCHY_STUB_REMOTE_DIGEST: "sha256:bbbb" });
+  const podman = doc.hosts.find((h) => h.name === "podman");
+  assert.equal(podman.ok, true, podman.error);
+  assert.equal(podman.images[0].ref, "docker.io/library/nginx:alpine");
+  assert.equal(podman.images[0].update, true);
+});
+
 test("cache is served while fresh and refreshed when stale", () => {
   const dir = mkdtempSync(join(tmpdir(), "dockarchy-updates-"));
   const cache = join(dir, "updates.json");

@@ -70,6 +70,46 @@ test("an unknown context is reported, not fatal", () => {
   // the fail path is covered above. This mostly checks ordering is preserved.
 });
 
+test("--podman hosts are normalised to docker's row shape", () => {
+  const doc = run(["--all", "--stats", "--timeout", "5", "--podman", "local,me@remote.example", "default"]);
+  assert.deepEqual(doc.hosts.map((h) => [h.name, h.endpoint]), [
+    ["default", "unix:///var/run/docker.sock"],
+    ["podman", "podman://local"],
+    ["podman@remote.example", "podman+ssh://me@remote.example"],
+  ]);
+  for (const h of doc.hosts.slice(1)) {
+    assert.equal(h.ok, true, h.error);
+    const [web, job] = h.containers;
+    assert.equal(web.ID, "c".repeat(64));
+    assert.equal(web.Names, "pweb");
+    assert.equal(web.Ports, "0.0.0.0:9090->80/tcp");
+    assert.equal(web.Labels, "com.docker.compose.project=pdemo,com.docker.compose.service=web");
+    assert.equal(web.Stats.CPUPerc, "1.25%");
+    assert.equal(web.Stats.PIDs, "5");
+    assert.equal(job.State, "exited");
+    assert.equal(job.Labels, "");
+    assert.equal(job.Stats, null);
+  }
+});
+
+test("podman only, no docker CLI at all", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dockarchy-podman-only-"));
+  for (const tool of ["jq", "bash", "timeout", "mktemp", "awk", "sed", "tr", "cat", "sort", "printf", "wait", "env", "grep"]) {
+    const found = execFileSync("sh", ["-c", `command -v ${tool} || true`], { encoding: "utf8" }).trim();
+    if (found) symlinkSync(found, join(dir, tool));
+  }
+  symlinkSync(join(here, "stub", "podman"), join(dir, "podman"));
+  try {
+    const out = execFileSync(script, ["--podman", "local"], { env: { ...process.env, PATH: dir }, encoding: "utf8" });
+    const doc = JSON.parse(out);
+    assert.equal(doc.installed, true);
+    assert.deepEqual(doc.hosts.map((h) => h.name), ["podman"]);
+    assert.equal(doc.hosts[0].containers.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("reports docker missing when the CLI is absent", () => {
   // A PATH with jq but no docker: symlink jq alone into a scratch dir.
   const dir = mkdtempSync(join(tmpdir(), "dockarchy-nodocker-"));

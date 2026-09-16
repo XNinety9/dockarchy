@@ -1,0 +1,22 @@
+#!/bin/bash
+# Fake podman CLI: the JSON shapes podman prints (arrays with its own field
+# names), so the collector's normalisation can be tested without podman.
+case "$1 $2" in
+  "ps "*|"ps")
+    all=""; for a in "$@"; do [[ $a == "-a" || $a == "--all" ]] && all=1; done
+    fmt=""; prev=""; for a in "$@"; do [[ $prev == "--format" ]] && fmt="$a"; prev="$a"; done
+    if [[ $fmt == "{{.Image}}" ]]; then echo "docker.io/library/nginx:alpine"; exit 0; fi
+    cat <<JSON
+[{"Id":"$(printf 'c%.0s' {1..64})","Names":["pweb"],"Image":"docker.io/library/nginx:alpine","State":"running","Status":"Up 5 minutes (healthy)",
+  "Ports":[{"host_ip":"","container_port":80,"host_port":9090,"range":1,"protocol":"tcp"}],
+  "Labels":{"com.docker.compose.project":"pdemo","com.docker.compose.service":"web"},"CreatedAt":"5 minutes ago"}$([[ -n $all ]] && printf ',\n{"Id":"%s","Names":["pjob"],"Image":"docker.io/library/alpine:latest","State":"exited","Status":"Exited (0) 1 hour ago","Ports":null,"Labels":null,"CreatedAt":"1 hour ago"}' "$(printf 'd%.0s' {1..64})")]
+JSON
+    ;;
+  "stats "*)
+    printf '[{"id":"%s","name":"pweb","cpu_percent":"1.25%%","mem_usage":"12.5MiB / 4GiB","mem_percent":"0.30%%","net_io":"1kB / 2kB","block_io":"0B / 0B","pids":5}]\n' "$(printf 'c%.0s' {1..64})"
+    ;;
+  "image inspect")
+    echo '["docker.io/library/nginx@sha256:aaaa"]'
+    ;;
+  *) echo "stub podman: unsupported: $*" >&2; exit 2 ;;
+esac

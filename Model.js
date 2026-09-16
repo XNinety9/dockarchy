@@ -42,6 +42,7 @@ function normalizeHost(host) {
     id: name,
     name: name,
     endpoint: String((host && host.endpoint) || ""),
+    engine: engineOf((host && host.endpoint) || ""),
     remote: isRemoteEndpoint((host && host.endpoint) || ""),
     ok: !!(host && host.ok),
     error: String((host && host.error) || ""),
@@ -198,8 +199,17 @@ function publishedPorts(text) {
 // remote contexts, the tcp host for tcp:// ones, localhost otherwise.
 function hostAddress(endpoint) {
   var e = String(endpoint || "")
-  var m = /^(?:ssh|tcp|https?):\/\/(?:[^@\/]+@)?([^:\/]+)/i.exec(e)
+  var m = /^(?:podman\+)?(?:ssh|tcp|https?):\/\/(?:[^@\/]+@)?([^:\/]+)/i.exec(e)
   return m ? m[1] : "localhost"
+}
+
+// Endpoint line under a host name: the transport, with the engine when it
+// is not docker.
+function endpointText(host) {
+  if (!host) return ""
+  var e = String(host.endpoint || "")
+  if (host.engine === "podman") return "podman · " + (e === "podman://local" ? "local" : e.replace(/^podman\+/, ""))
+  return e
 }
 
 function portUrl(endpoint, port) {
@@ -210,7 +220,12 @@ function portUrl(endpoint, port) {
 
 function isRemoteEndpoint(endpoint) {
   var e = String(endpoint || "")
-  return /^(ssh|tcp|https?):\/\//i.test(e)
+  return /^(podman\+)?(ssh|tcp|https?):\/\//i.test(e)
+}
+
+// "docker" for docker contexts, "podman" for podman:// and podman+ssh:// hosts.
+function engineOf(endpoint) {
+  return /^podman(\+ssh)?:\/\//i.test(String(endpoint || "")) ? "podman" : "docker"
 }
 
 function compareContainers(a, b) {
@@ -387,7 +402,7 @@ function groupSummary(group) {
 // bin/dockarchy-status so terminal actions on remote hosts reuse the user's
 // ~/.ssh/config (ControlMaster and friends) instead of docker's own transport.
 function sshArgv(endpoint) {
-  var m = /^ssh:\/\/(?:([^@\/]+)@)?([^:\/]+)(?::(\d+))?/i.exec(String(endpoint || ""))
+  var m = /^(?:podman\+)?ssh:\/\/(?:([^@\/]+)@)?([^:\/]+)(?::(\d+))?/i.exec(String(endpoint || ""))
   if (!m) return null
   var argv = ["ssh"]
   if (m[3]) argv.push("-p", m[3])
@@ -701,7 +716,7 @@ if (typeof module !== "undefined") {
     healthFromStatus: healthFromStatus, summarizePorts: summarizePorts, summaryText: summaryText,
     stateGlyph: stateGlyph, hostGlyph: hostGlyph, errorHint: errorHint, shortError: shortError,
     formatBar: formatBar, normalizeStats: normalizeStats, formatPercent: formatPercent, shortBytes: shortBytes, statsTooltip: statsTooltip,
-    publishedPorts: publishedPorts, hostAddress: hostAddress, portUrl: portUrl,
+    publishedPorts: publishedPorts, hostAddress: hostAddress, portUrl: portUrl, engineOf: engineOf, endpointText: endpointText,
     sortContainers: sortContainers, nextSortMode: nextSortMode, memBytes: memBytes, SORT_MODES: SORT_MODES,
     pushHistory: pushHistory, sparkPoints: sparkPoints, seriesStats: seriesStats, bytesText: bytesText, historyTooltip: historyTooltip, HISTORY_LENGTH: HISTORY_LENGTH,
     METRICS: METRICS, METRIC_NAMES: METRIC_NAMES, ioBytes: ioBytes, ioTotal: ioTotal, rateText: rateText, metricValueText: metricValueText,

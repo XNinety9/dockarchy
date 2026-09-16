@@ -109,6 +109,23 @@ test("groupContainers: projects alphabetical, standalone last, off = one anonymo
   assert.equal(Model.groupKey("srv", "blog"), "srv//blog");
 });
 
+test("engines and endpoints", () => {
+  assert.equal(Model.engineOf("podman://local"), "podman");
+  assert.equal(Model.engineOf("podman+ssh://me@srv"), "podman");
+  assert.equal(Model.engineOf("ssh://me@srv"), "docker");
+  assert.equal(Model.engineOf("unix:///var/run/docker.sock"), "docker");
+  assert.deepEqual(Model.sshArgv("podman+ssh://me@srv:2222"), ["ssh", "-p", "2222", "-l", "me", "--", "srv"]);
+  assert.equal(Model.sshArgv("podman://local"), null);
+  assert.equal(Model.hostAddress("podman://local"), "localhost");
+  assert.equal(Model.hostAddress("podman+ssh://me@srv"), "srv");
+  assert.equal(Model.endpointText({ engine: "podman", endpoint: "podman://local" }), "podman · local");
+  assert.equal(Model.endpointText({ engine: "podman", endpoint: "podman+ssh://me@srv" }), "podman · ssh://me@srv");
+  assert.equal(Model.endpointText({ engine: "docker", endpoint: "ssh://me@srv" }), "ssh://me@srv");
+  const parsed = Model.parseStatus(JSON.stringify({ installed: true, hosts: [{ name: "podman@srv", endpoint: "podman+ssh://me@srv", ok: true, containers: [] }] }));
+  assert.equal(parsed.hosts[0].engine, "podman");
+  assert.equal(parsed.hosts[0].remote, true);
+});
+
 test("ssh helpers", () => {
   assert.deepEqual(Model.sshArgv("ssh://x99@x99.fr"), ["ssh", "-l", "x99", "--", "x99.fr"]);
   assert.deepEqual(Model.sshArgv("ssh://host:2222"), ["ssh", "-p", "2222", "--", "host"]);
