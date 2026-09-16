@@ -33,7 +33,7 @@ jobs:
           test -f "$(jq -r .entryPoints.barWidget manifest.json)"
 
       - name: Notification icons are well-formed XML
-        run: for f in assets/*.svg; do xmllint --noout "$f"; done
+        run: for f in assets/*.svg; do python3 -c "import sys, xml.dom.minidom; xml.dom.minidom.parse(sys.argv[1])" "$f"; done
 
       - name: README does not reference Nerd Font private-use glyphs
         run: |
