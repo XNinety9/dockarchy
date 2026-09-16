@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# Add a "Docker" submenu to the Omarchy menu (Super+Alt+Space by default).
+#
+#   dockarchy-menu            print the JSONC snippet
+#   dockarchy-menu install    append it to ~/.config/omarchy/extensions/omarchy-menu.jsonc
+#   dockarchy-menu remove     take it out again
+#
+# The menu file is user configuration, so this is never run automatically:
+# install/remove edit it only when you ask, and keep a timestamped backup.
+# The shell watches the file, so changes show up without a restart.
+
+set -euo pipefail
+
+FILE="${OMARCHY_MENU_EXTENSIONS:-$HOME/.config/omarchy/extensions/omarchy-menu.jsonc}"
+BEGIN="  // >>> dockarchy"
+END="  // <<< dockarchy"
+
+snippet() {
+  cat <<'JSONC'
+  // >>> dockarchy
+  "docker": {"icon":"󰡨","label":"Docker","aliases":["docker","containers","dockarchy"]},
+  "docker.panel": {"icon":"󰆧","label":"Containers","description":"Open the Dockarchy panel","action":"omarchy-shell x99.dockarchy toggle"},
+  "docker.search": {"icon":"󰍉","label":"Search containers","action":"omarchy-shell x99.dockarchy search ''"},
+  "docker.refresh": {"icon":"󰑐","label":"Refresh now","action":"omarchy-shell x99.dockarchy refresh"},
+  "docker.sort": {"icon":"󰒺","label":"Next sort order","description":"State → Name → CPU → Memory","action":"omarchy-shell x99.dockarchy sort next"},
+  "docker.lazydocker": {"icon":"󰆍","label":"lazydocker","when":"command -v lazydocker","action":"omarchy-launch-docker-tui"},
+  // <<< dockarchy
+JSONC
+}
+
+strip_snippet() {
+  # Print the file without the marked block.
+  awk -v b="$BEGIN" -v e="$END" '
+    $0 == b { skip = 1; next }
+    $0 == e { skip = 0; next }
+    !skip { print }
+  ' "$1"
+}
+
+backup() {
+  [[ -f $FILE ]] && cp "$FILE" "$FILE.bak.$(date +%s)"
+}
+
+case "${1:-print}" in
+print)
+  snippet
+  ;;
+install)
+  mkdir -p "$(dirname "$FILE")"
+  [[ -f $FILE ]] || printf '{\n}\n' >"$FILE"
+  backup
+  strip_snippet "$FILE" >"$FILE.tmp"
+  # Insert before the closing brace of the top-level object. JSONC allows a
+  # trailing comma, but the previous entry may not have one — and the last
+  # line before the brace may be a comment — so the comma goes onto the last
+  # line that is actual code.
+  awk -v snippet="$(snippet)" '
+    { lines[NR] = $0 }
+    END {
+      close_at = 0
+      for (i = NR; i >= 1; i--) if (lines[i] ~ /^[[:space:]]*\}[[:space:]]*$/) { close_at = i; break }
+      if (close_at == 0) { for (i = 1; i <= NR; i++) print lines[i]; print snippet; print "}"; exit }
+      code_at = 0
+      for (i = close_at - 1; i >= 1; i--) {
+        if (lines[i] ~ /^[[:space:]]*$/ || lines[i] ~ /^[[:space:]]*\/\//) continue
+        code_at = i; break
+      }
+      if (code_at > 0) {
+        line = lines[code_at]; sub(/[[:space:]]+$/, "", line)
+        if (line !~ /[{,]$/) lines[code_at] = line ","
+      }
+      for (i = 1; i < close_at; i++) print lines[i]
+      print snippet
+      for (i = close_at; i <= NR; i++) print lines[i]
+    }
+  ' "$FILE.tmp" >"$FILE"
+  rm -f "$FILE.tmp"
+  echo "Added the Docker submenu to $FILE"
+  ;;
+remove)
+  [[ -f $FILE ]] || { echo "nothing to remove: $FILE does not exist"; exit 0; }
+  backup
+  strip_snippet "$FILE" >"$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+  echo "Removed the Docker submenu from $FILE"
+  ;;
+*)
+  echo "usage: dockarchy-menu [print|install|remove]" >&2
+  exit 2
+  ;;
+esac

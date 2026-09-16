@@ -239,6 +239,18 @@ omarchy-shell x99.dockarchy rows        # what the panel currently lists, for de
 omarchy-shell x99.dockarchy history <context> <name|id>   # the sparkline series
 ```
 
+## Omarchy menu
+
+Add a **Docker** submenu (panel, search, refresh, sort, lazydocker) to the
+Omarchy menu with:
+
+```bash
+~/.config/omarchy/plugins/x99.dockarchy/bin/dockarchy-menu install   # or: remove
+```
+
+It appends a marked block to `~/.config/omarchy/extensions/omarchy-menu.jsonc`
+(backup kept next to it) and is only ever run by you. The menu reloads on save.
+
 Handy for a Hyprland keybinding in `~/.config/hypr/bindings.lua`:
 
 ```lua
@@ -257,6 +269,7 @@ test/                   node --test suites and the stub docker/ssh they run agai
 bin/dockarchy-status    queries every context in parallel (one ssh session per
                         remote host) and prints a single JSON document
 bin/dockarchy-contexts  lists context names for the settings picker
+bin/dockarchy-menu      adds/removes the Docker submenu in the Omarchy menu
 ```
 
 `bin/dockarchy-status --all --stats --timeout 5 [ctx ...] | jq .` shows exactly
@@ -293,7 +306,8 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
-- **0.6.0** — notification icons are now Nerd Font glyphs rendered in the
+- **0.6.0** — `dockarchy-menu` adds a Docker submenu to the Omarchy menu;
+  notification icons are now Nerd Font glyphs rendered in the
   theme's colours; sparklines per running container for a chosen set of metrics
   (CPU, memory, network and disk throughput, PIDs) over a configurable number
   of polls, with min/avg/max in the tooltip; optional accent tint for running
