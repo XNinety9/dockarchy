@@ -149,7 +149,7 @@ use your default terminal; on remote hosts they run over your own `ssh` config.
 ### Notifications
 
 Dockarchy compares each poll with the previous one and sends a desktop
-notification (with its own icon) when:
+notification when:
 
 - a container turns **unhealthy** or stops **on its own** — never for a stop,
   restart or start you asked for from the panel or its IPC;
@@ -158,6 +158,12 @@ notification (with its own icon) when:
 Set `notifications` to `Problems and recoveries` to also hear when a container
 is healthy or running again, or a host is back. Health flaps are debounced
 (2 min per container), stops 20 s. `Off` disables it.
+
+The icon is the Nerd Font whale with an alert or check badge, rendered by
+`assets/render-icons` (ImageMagick) into `~/.cache/dockarchy/` in your current
+theme's colours when the shell starts and whenever the theme changes. Without
+ImageMagick the pre-rendered PNGs in `assets/` are used instead. Any Nerd Font
+works; set `DOCKARCHY_ICON_FONT` to force one.
 
 ### What the colours mean
 
@@ -246,7 +252,7 @@ manifest.json           plugin id, defaults and settings schema
 Panel.qml               bar button + popup: rows, cursor, keys, footer
 Service.qml             polling, actions, timers, watchdog
 Model.js                pure JS parsing, filtering, grouping, diffing — testable with node
-assets/                 notification icons
+assets/                 render-icons (glyphs -> PNG) and fallback renders
 test/                   node --test suites and the stub docker/ssh they run against
 bin/dockarchy-status    queries every context in parallel (one ssh session per
                         remote host) and prints a single JSON document
@@ -287,7 +293,8 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
-- **0.6.0** — sparklines per running container for a chosen set of metrics
+- **0.6.0** — notification icons are now Nerd Font glyphs rendered in the
+  theme's colours; sparklines per running container for a chosen set of metrics
   (CPU, memory, network and disk throughput, PIDs) over a configurable number
   of polls, with min/avg/max in the tooltip; optional accent tint for running
   containers.

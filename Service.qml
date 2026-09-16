@@ -53,8 +53,51 @@ Item {
   readonly property bool healthy: counts.unhealthy === 0 && counts.unreachable === 0
   readonly property string summaryText: Model.summaryText(everRefreshed ? counts : null, installed)
 
-  readonly property string iconProblem: pluginDir + "/assets/dockarchy-problem.svg"
-  readonly property string iconRecovery: pluginDir + "/assets/dockarchy-recovery.svg"
+  // Notification icons are Nerd Font glyphs rendered to PNG in the theme's
+  // colours at startup (and again when the theme changes). Until that has
+  // happened, or if ImageMagick is missing, the PNGs shipped in assets/ serve.
+  readonly property string iconDir: (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache")) + "/dockarchy"
+  property bool iconsRendered: false
+  readonly property string iconProblem: (iconsRendered ? iconDir : pluginDir + "/assets") + "/problem.png"
+  readonly property string iconRecovery: (iconsRendered ? iconDir : pluginDir + "/assets") + "/recovery.png"
+
+  function hexColor(c) {
+    function h(v) { var s = Math.round(v * 255).toString(16); return s.length < 2 ? "0" + s : s }
+    return "#" + h(c.r) + h(c.g) + h(c.b)
+  }
+
+  function renderIcons() {
+    if (iconProcess.running) { iconRenderRetry.restart(); return }
+    var fg = Color.foreground
+    var urgent = Color.urgent
+    var warn = Qt.rgba(fg.r + (urgent.r - fg.r) * 0.55, fg.g + (urgent.g - fg.g) * 0.55, fg.b + (urgent.b - fg.b) * 0.55, 1)
+    iconProcess.command = [pluginDir + "/assets/render-icons", "--out", iconDir,
+      "--fg", hexColor(fg), "--warn", hexColor(warn), "--ok", hexColor(Color.accent)]
+    iconProcess.running = true
+  }
+
+  Component.onCompleted: renderIcons()
+
+  Connections {
+    target: Color
+    function onForegroundChanged() { iconRenderRetry.restart() }
+    function onAccentChanged() { iconRenderRetry.restart() }
+  }
+
+  Process {
+    id: iconProcess
+    running: false
+    command: []
+    onExited: function(exitCode) { root.iconsRendered = exitCode === 0 }
+  }
+
+  // Theme changes fire several colour signals in a row; render once.
+  Timer {
+    id: iconRenderRetry
+    interval: 800
+    repeat: false
+    onTriggered: root.renderIcons()
+  }
 
   readonly property string pluginDir: {
     var url = Qt.resolvedUrl(".").toString()

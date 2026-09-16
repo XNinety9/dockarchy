@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Render the notification icons from Nerd Font glyphs with ImageMagick.
+#
+#   assets/render-icons [--out DIR] [--fg '#cacccc'] [--warn '#f5a524'] [--ok '#3dbe6c'] [--font 'FiraCode Nerd Font']
+#
+# Produces DIR/problem.png and DIR/recovery.png (256x256, transparent): the
+# docker whale (U+F0868) with an alert (U+F0026) or check (U+F012C) badge.
+# Any Nerd Font works — the icon codepoints are shared across the family.
+# The Service runs this at startup with the theme's colours; the PNGs shipped
+# in assets/ are a fallback rendered with the defaults below.
+
+set -euo pipefail
+
+OUT="$(dirname "$0")"
+FG="#cacccc"
+WARN="#f5a524"
+OK="#3dbe6c"
+FONT_QUERY="${DOCKARCHY_ICON_FONT:-monospace}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --out) OUT="$2"; shift 2 ;;
+  --fg) FG="$2"; shift 2 ;;
+  --warn) WARN="$2"; shift 2 ;;
+  --ok) OK="$2"; shift 2 ;;
+  --font) FONT_QUERY="$2"; shift 2 ;;
+  *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+command -v magick >/dev/null 2>&1 || { echo "ImageMagick (magick) is required" >&2; exit 1; }
+
+# Prefer an explicit Nerd Font; fall back to whatever monospace resolves to,
+# which on Omarchy is the Nerd Font the bar uses.
+FONT_FILE="$(fc-match -f '%{file}' "$FONT_QUERY")"
+if ! fc-match -f '%{family}' "$FONT_QUERY" | grep -qi "nerd"; then
+  ALT="$(fc-list : family file | grep -i "nerd font" | grep -iv "propo" | head -1 | sed 's/: .*//')"
+  [[ -n $ALT ]] && FONT_FILE="$ALT"
+fi
+
+mkdir -p "$OUT"
+WHALE=$'\U000F0868'
+ALERT=$'\U000F0026'
+CHECK=$'\U000F012C'
+
+render() {
+  local badge="$1" color="$2" file="$3"
+  magick -size 256x256 xc:none \
+    -font "$FONT_FILE" -fill "$FG" -pointsize 190 -gravity center -annotate +0+8 "$WHALE" \
+    -font "$FONT_FILE" -fill "$color" -pointsize 96 -gravity northeast -annotate +10+6 "$badge" \
+    "$file"
+}
+
+render "$ALERT" "$WARN" "$OUT/problem.png"
+render "$CHECK" "$OK" "$OUT/recovery.png"
+echo "rendered $OUT/problem.png $OUT/recovery.png with $(basename "$FONT_FILE")"
