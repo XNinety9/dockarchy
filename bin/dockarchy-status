@@ -6,7 +6,7 @@
 #   [{ "name": "default", "endpoint": "unix:///var/run/docker.sock",
 #      "ok": true, "error": "", "containers": [ {docker ps json}, ... ] }]
 #
-# Usage: dockarchy-status [--all] [--stats] [--timeout SEC] [--podman HOSTS] [context ...]
+# Usage: dockarchy-status [--all] [--stats] [--timeout SEC] [--max-bytes N] [--podman HOSTS] [context ...]
 #
 # --podman takes a comma-separated list of Podman hosts: "local" for this
 # machine's podman, or "[user@]host[:port]" for podman over ssh. They appear as
@@ -28,6 +28,7 @@ set -uo pipefail
 ALL=""
 STATS=""
 TIMEOUT=10
+MAX_BYTES=$((8 * 1024 * 1024))
 PODMAN=""
 CONTEXTS=()
 
@@ -37,6 +38,7 @@ while [[ $# -gt 0 ]]; do
   --stats) STATS="1"; shift ;;
   --timeout) TIMEOUT="${2:-10}"; shift 2 ;;
   --podman) PODMAN="${2:-}"; shift 2 ;;
+  --max-bytes) MAX_BYTES="${2:-8388608}"; shift 2 ;;
   --) shift; CONTEXTS+=("$@"); break ;;
   *) CONTEXTS+=("$1"); shift ;;
   esac
@@ -79,6 +81,25 @@ done
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+# Run a command with hard ceilings: stdout is cut at MAX_BYTES (+1 so an
+# overrun is detectable), stderr at 64 KiB, both while streaming, so a
+# misbehaving daemon or a compromised ssh peer cannot fill the disk or,
+# via jq --slurpfile, memory. Returns 125 when stdout exceeded the limit,
+# otherwise the command's own status (124 from `timeout`).
+STDERR_MAX=65536
+bounded_run() {
+  local out="$1" err="$2" max="$3"
+  shift 3
+  { "$@" 2>&1 1>&3 3>&- | head -c "$STDERR_MAX" >"$err"; exit "${PIPESTATUS[0]}"; } 3>&1 | head -c "$((max + 1))" >"$out"
+  local rc="${PIPESTATUS[0]}"
+  if [[ $(stat -c %s "$out" 2>/dev/null || echo 0) -gt $max ]]; then return 125; fi
+  return "$rc"
+}
+
+# Bound how many hosts are queried at all and at once.
+MAX_CONTEXTS=32
+MAX_PARALLEL=4
 
 # Remote hosts: run docker *on the server* over exactly one ssh session per
 # poll. `docker --context ssh://…` instead opens one ssh session per API call
@@ -134,16 +155,21 @@ query() {
   if [[ $endpoint == ssh://* || $endpoint == podman+ssh://* ]]; then
     local SSH_ARGV
     ssh_argv_for "${endpoint#podman+}"
-    timeout "$TIMEOUT" "${SSH_ARGV[@]}" "bash -s" <<<"$(remote_script "$engine")" >"$raw_out" 2>"$err_out"
+    bounded_run "$raw_out" "$err_out" "$MAX_BYTES" timeout "$TIMEOUT" "${SSH_ARGV[@]}" "bash -s" <<<"$(remote_script "$engine")"
     rc=$?
   elif [[ $engine == podman ]]; then
-    timeout "$TIMEOUT" bash -s <<<"$(remote_script podman)" >"$raw_out" 2>"$err_out"
+    bounded_run "$raw_out" "$err_out" "$MAX_BYTES" timeout "$TIMEOUT" bash -s <<<"$(remote_script podman)"
     rc=$?
   else
     # Non-ssh contexts (unix socket, tcp://) go through the context itself,
     # where the per-call transport cost is negligible.
-    timeout "$TIMEOUT" env DOCKER_CONTEXT="$ctx" bash -s <<<"$(remote_script)" >"$raw_out" 2>"$err_out"
+    bounded_run "$raw_out" "$err_out" "$MAX_BYTES" timeout "$TIMEOUT" env DOCKER_CONTEXT="$ctx" bash -s <<<"$(remote_script)"
     rc=$?
+  fi
+  if [[ $rc -eq 125 ]]; then
+    jq -cn --arg name "$ctx" --arg endpoint "$endpoint" --arg error "Response exceeded $MAX_BYTES bytes; refusing to parse it" \
+      '{name: $name, endpoint: $endpoint, ok: false, error: $error, containers: []}' >"$TMP/$idx.json"
+    return
   fi
 
   awk -v ps="$ps_out" -v st="$stats_out" '
@@ -167,7 +193,7 @@ query() {
     if [[ $rc -eq 124 ]]; then
       msg="Timed out after ${TIMEOUT}s"
     else
-      msg="$(cat "$err_out" 2>/dev/null | grep -v '^__DOCKARCHY' | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+      msg="$(head -c 4096 "$err_out" 2>/dev/null | grep -v '^__DOCKARCHY' | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | head -c 400)"
       [[ -z $msg ]] && msg="docker exited with status $rc"
     fi
     jq -cn --arg name "$ctx" --arg endpoint "$endpoint" --arg error "$msg" \
@@ -175,10 +201,22 @@ query() {
   fi
 }
 
+if [[ ${#CONTEXTS[@]} -gt $MAX_CONTEXTS ]]; then
+  jq -cn --arg error "$(( ${#CONTEXTS[@]} - MAX_CONTEXTS )) contexts beyond the limit of $MAX_CONTEXTS were skipped" \
+    '{name: "…", endpoint: "", ok: false, error: $error, containers: []}' >"$TMP/999.json"
+  CONTEXTS=("${CONTEXTS[@]:0:$MAX_CONTEXTS}")
+fi
+
 i=0
+running=0
 for ctx in "${CONTEXTS[@]}"; do
   query "$(printf '%03d' "$i")" "$ctx" &
   i=$((i + 1))
+  running=$((running + 1))
+  if [[ $running -ge $MAX_PARALLEL ]]; then
+    wait -n
+    running=$((running - 1))
+  fi
 done
 wait
 

@@ -4,6 +4,8 @@
 #   ok      (default) two containers, one with stats
 #   fail    `docker ps` fails like an unreachable daemon
 #   hang    `docker ps` never returns (to exercise --timeout)
+#   flood   `docker ps` streams 64 MiB of rows (to exercise --max-bytes)
+#   stderr-flood  `docker ps` fails after 16 MiB of stderr
 mode="${DOCKARCHY_STUB_MODE:-ok}"
 ctx=""
 if [[ ${1:-} == "--context" ]]; then ctx="$2"; shift 2; fi
@@ -18,6 +20,8 @@ case "$1 $2" in
     case "$mode" in
       fail) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;;
       hang) sleep 60 ;;
+      flood) yes '{"ID":"ffffffffffff","Names":"flood","Image":"x","State":"running","Status":"Up"}' | head -c $((64 * 1024 * 1024)); exit 0 ;;
+      stderr-flood) yes "noise" | head -c $((16 * 1024 * 1024)) >&2; exit 1 ;;
     esac
     all=""; fmt=""
     shift

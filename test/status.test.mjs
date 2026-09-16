@@ -63,6 +63,33 @@ test("a hanging daemon is cut off by --timeout", () => {
   assert.ok(Date.now() - started < 5000, "timeout bounded the run");
 });
 
+test("oversized responses are rejected before parsing", () => {
+  const started = Date.now();
+  const doc = run(["--timeout", "20", "--max-bytes", "65536", "default"], { DOCKARCHY_STUB_MODE: "flood" });
+  assert.equal(doc.hosts[0].ok, false);
+  assert.match(doc.hosts[0].error, /exceeded 65536 bytes/);
+  assert.ok(Date.now() - started < 10000);
+  // The collector never wrote more than the ceiling: with the default limit
+  // a 64 MiB flood is still refused, so a bad host cannot fill the disk.
+  const big = run(["--timeout", "20", "default"], { DOCKARCHY_STUB_MODE: "flood" });
+  assert.match(big.hosts[0].error, /exceeded/);
+});
+
+test("stderr floods are capped and the failure still reported", () => {
+  const doc = run(["--timeout", "20", "default"], { DOCKARCHY_STUB_MODE: "stderr-flood" });
+  assert.equal(doc.hosts[0].ok, false);
+  assert.ok(doc.hosts[0].error.length <= 400, "error message is elided");
+});
+
+test("context count and concurrency are capped", () => {
+  const many = Array.from({ length: 40 }, (_, i) => `ctx${i}`);
+  const doc = run(["--timeout", "5", ...many]);
+  const skipped = doc.hosts.find((h) => h.name === "…");
+  assert.ok(skipped, "a synthetic entry reports the skipped contexts");
+  assert.match(skipped.error, /8 contexts beyond the limit of 32/);
+  assert.equal(doc.hosts.filter((h) => h.name !== "…").length, 32);
+});
+
 test("an unknown context is reported, not fatal", () => {
   const doc = run(["--timeout", "5", "default", "ghost"]);
   assert.deepEqual(doc.hosts.map((h) => [h.name, h.ok]), [["default", true], ["ghost", true]]);
@@ -94,7 +121,7 @@ test("--podman hosts are normalised to docker's row shape", () => {
 
 test("podman only, no docker CLI at all", () => {
   const dir = mkdtempSync(join(tmpdir(), "dockarchy-podman-only-"));
-  for (const tool of ["jq", "bash", "timeout", "mktemp", "awk", "sed", "tr", "cat", "sort", "printf", "wait", "env", "grep"]) {
+  for (const tool of ["jq", "bash", "timeout", "mktemp", "awk", "sed", "tr", "cat", "sort", "printf", "env", "grep", "head", "stat", "rm", "mkdir"]) {
     const found = execFileSync("sh", ["-c", `command -v ${tool} || true`], { encoding: "utf8" }).trim();
     if (found) symlinkSync(found, join(dir, tool));
   }
