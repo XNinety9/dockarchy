@@ -21,17 +21,34 @@ Item {
   property var counts: Model.emptyCounts()
   property string lastError: ""
   property string actionStatus: ""
-  // "<context>/<container id>" while a start/stop/restart is in flight.
+  // "<context>/<container id>" (or "<context>//<project>" for a whole compose
+  // group) while a start/stop/restart is in flight.
   property string pendingActionKey: ""
+
+  // Previous poll, for change detection. Null until the first good poll so a
+  // shell restart never fires a burst of "X is running" notifications.
+  property var _lastSnapshot: null
+  // "host/id" -> {until, verb} for containers the user just acted on; the
+  // transition they asked for is theirs, not an incident.
+  property var _userTouched: ({})
+  // "type:key" -> last notified ms, to tame flapping health checks.
+  property var _notified: ({})
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 15, 5, 3600)
   readonly property int timeoutSec: intSetting("timeoutSec", 10, 2, 120)
   readonly property bool showAll: boolSetting("showAll", true)
   readonly property bool showStats: boolSetting("showStats", true)
+  readonly property bool groupByProject: boolSetting("groupByProject", true)
+  // "Off" | "Problems" | "Problems and recoveries"
+  readonly property string notifications: stringSetting("notifications", "Problems")
   readonly property var contexts: listSetting("contexts")
   readonly property bool busy: statusProcess.running || actionProcess.running
+  readonly property bool actionRunning: actionProcess.running
   readonly property bool healthy: counts.unhealthy === 0 && counts.unreachable === 0
   readonly property string summaryText: Model.summaryText(everRefreshed ? counts : null, installed)
+
+  readonly property string iconProblem: pluginDir + "/assets/dockarchy-problem.svg"
+  readonly property string iconRecovery: pluginDir + "/assets/dockarchy-recovery.svg"
 
   readonly property string pluginDir: {
     var url = Qt.resolvedUrl(".").toString()
@@ -120,6 +137,47 @@ Item {
     counts = parsed.counts
     everRefreshed = true
     lastError = ""
+    var snap = Model.snapshot(hosts)
+    if (_lastSnapshot) notifyChanges(Model.diffSnapshots(_lastSnapshot, snap, currentUserTouched()))
+    _lastSnapshot = snap
+  }
+
+  // Drop expired entries and return a plain key -> verb map for
+  // Model.diffSnapshots.
+  function currentUserTouched() {
+    var now = Date.now()
+    var live = {}
+    var verbs = {}
+    for (var k in _userTouched) if (_userTouched[k].until > now) { live[k] = _userTouched[k]; verbs[k] = _userTouched[k].verb }
+    _userTouched = live
+    return verbs
+  }
+
+  function markUserTouched(host, containers, verb) {
+    var until = Date.now() + 90000
+    currentUserTouched()
+    var next = {}
+    for (var k in _userTouched) next[k] = _userTouched[k]
+    for (var i = 0; i < containers.length; i++) next[String(host.name) + "/" + String(containers[i].id)] = { until: until, verb: String(verb) }
+    _userTouched = next
+  }
+
+  function notifyChanges(events) {
+    if (notifications === "Off") return
+    var now = Date.now()
+    for (var i = 0; i < events.length; i++) {
+      var e = events[i]
+      if (e.kind === "recovery" && notifications !== "Problems and recoveries") continue
+      var dedupe = e.type + ":" + (e.key || e.host)
+      // Health checks flap; stops and host outages are discrete events.
+      var quiet = (e.type === "unhealthy" || e.type === "healthy") ? 120000 : 20000
+      if (_notified[dedupe] && now - _notified[dedupe] < quiet) continue
+      _notified[dedupe] = now
+      Quickshell.execDetached(["notify-send", "-a", "Dockarchy", "-u", e.kind === "problem" ? "critical" : "normal",
+        "-i", e.kind === "problem" ? iconProblem : iconRecovery,
+        "-h", "string:x-canonical-private-synchronous:dockarchy-" + dedupe,
+        String(e.title), String(e.body || "")])
+    }
   }
 
   function findContainer(contextName, ref) {
@@ -146,6 +204,16 @@ Item {
     return key !== "" && key === pendingActionKey
   }
 
+  function groupActionKey(host, group) {
+    if (!host || !group) return ""
+    return String(host.name) + "//" + String(group.project)
+  }
+
+  function isGroupPending(host, group) {
+    var key = groupActionKey(host, group)
+    return key !== "" && key === pendingActionKey
+  }
+
   function containerAction(host, container, verb) {
     if (!host || !container || actionProcess.running) return
     var allowed = ["start", "stop", "restart", "pause", "unpause"]
@@ -153,9 +221,55 @@ Item {
     _actionOutput = ""
     _actionError = ""
     pendingActionKey = actionKey(host, container)
+    markUserTouched(host, [container], verb)
     actionStatus = capitalize(verb) + "ing " + container.name + "…"
     actionProcess.command = ["timeout", String(Math.max(timeoutSec, 30)), "docker", "--context", String(host.name), verb, String(container.id)]
     actionProcess.running = true
+  }
+
+  // One docker invocation for the whole group, so a remote host sees a single
+  // request rather than one per container.
+  function groupAction(host, group, verb) {
+    if (!host || !group || actionProcess.running) return
+    var targets = []
+    for (var i = 0; i < group.containers.length; i++) {
+      var c = group.containers[i]
+      if (verb === "start" && c.running) continue
+      if ((verb === "stop" || verb === "restart") && !c.running) continue
+      targets.push(c)
+    }
+    if (targets.length === 0) return
+    _actionOutput = ""
+    _actionError = ""
+    pendingActionKey = groupActionKey(host, group)
+    markUserTouched(host, targets, verb)
+    actionStatus = capitalize(verb) + "ing " + (group.project || "standalone containers") + " (" + targets.length + ")…"
+    var cmd = ["timeout", String(Math.max(timeoutSec, 60)), "docker", "--context", String(host.name), verb]
+    for (var t = 0; t < targets.length; t++) cmd.push(String(targets[t].id))
+    actionProcess.command = cmd
+    actionProcess.running = true
+  }
+
+  // Terminal command for a host: docker is run on the server over the user's
+  // ssh config for remote contexts, locally otherwise. `argv` is the docker
+  // argv without the leading "docker".
+  function dockerTerminalCommand(host, argv) {
+    var ssh = host ? Model.sshArgv(host.endpoint) : null
+    if (ssh) {
+      var quoted = ["docker"]
+      for (var i = 0; i < argv.length; i++) quoted.push(Model.shellQuote(argv[i]))
+      // -t so an interactive docker exec gets a TTY through ssh.
+      return ssh.slice(0, 1).concat(["-t"]).concat(ssh.slice(1)).concat([quoted.join(" ")])
+    }
+    var local = ["docker"]
+    if (host && host.name) local.push("--context", String(host.name))
+    return local.concat(argv)
+  }
+
+  function openGroupLogs(host, group) {
+    if (!host || !group || !group.project) return
+    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.dockarchy-logs"]
+      .concat(dockerTerminalCommand(host, ["compose", "-p", String(group.project), "logs", "--follow", "--tail", "100"])))
   }
 
   function toggleContainer(host, container) {
@@ -172,15 +286,15 @@ Item {
   // same styling and app-id handling as btop, lazydocker and friends.
   function openLogs(host, container) {
     if (!host || !container) return
-    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.dockarchy-logs",
-      "docker", "--context", String(host.name), "logs", "--follow", "--tail", "200", String(container.id)])
+    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.dockarchy-logs"]
+      .concat(dockerTerminalCommand(host, ["logs", "--follow", "--tail", "200", String(container.id)])))
   }
 
   function openShell(host, container) {
     if (!host || !container || !container.running) return
-    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.dockarchy-shell",
-      "docker", "--context", String(host.name), "exec", "-it", String(container.id),
-      "sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"])
+    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.dockarchy-shell"]
+      .concat(dockerTerminalCommand(host, ["exec", "-it", String(container.id),
+        "sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"])))
   }
 
   function openLazydocker(host) {

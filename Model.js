@@ -67,6 +67,7 @@ function normalizeContainer(c) {
     ports: summarizePorts((c && c.Ports) || ""),
     project: String(labels["com.docker.compose.project"] || ""),
     service: String(labels["com.docker.compose.service"] || ""),
+    workingDir: String(labels["com.docker.compose.project.working_dir"] || ""),
     createdAt: String((c && c.CreatedAt) || ""),
     stats: normalizeStats(c && c.Stats)
   }
@@ -241,6 +242,148 @@ function summaryText(counts, installed) {
   return parts.join(" · ")
 }
 
+// ---- search -----------------------------------------------------------------
+
+// Case-insensitive substring match over the fields a person would type:
+// name, image, compose project/service, state and the status line. Every
+// whitespace-separated word must match somewhere.
+function matchesQuery(container, query) {
+  var q = String(query || "").trim().toLowerCase()
+  if (q === "") return true
+  if (!container) return false
+  var hay = [container.name, container.image, container.project, container.service, container.state, container.status, container.ports]
+    .join(" ").toLowerCase()
+  var words = q.split(/\s+/)
+  for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) === -1) return false
+  return true
+}
+
+function filterContainers(containers, query) {
+  var out = []
+  for (var i = 0; i < (containers || []).length; i++) if (matchesQuery(containers[i], query)) out.push(containers[i])
+  return out
+}
+
+// ---- compose groups ---------------------------------------------------------
+
+// Split a host's containers into compose projects, keeping the containers'
+// existing order inside each group. Projects come first (alphabetical), then
+// one trailing group with project "" for standalone containers. With
+// grouping off the whole list is returned as that single anonymous group.
+function groupContainers(containers, enabled) {
+  var list = containers || []
+  if (!enabled) return [{ project: "", containers: list, counts: countContainers(list), workingDir: "" }]
+  var byProject = {}
+  var order = []
+  var standalone = []
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i]
+    if (!c.project) { standalone.push(c); continue }
+    if (!byProject[c.project]) { byProject[c.project] = []; order.push(c.project) }
+    byProject[c.project].push(c)
+  }
+  order.sort(function(a, b) { return a.localeCompare(b) })
+  var groups = []
+  for (var g = 0; g < order.length; g++) {
+    var members = byProject[order[g]]
+    groups.push({ project: order[g], containers: members, counts: countContainers(members), workingDir: firstWorkingDir(members) })
+  }
+  if (standalone.length > 0) groups.push({ project: "", containers: standalone, counts: countContainers(standalone), workingDir: "" })
+  return groups
+}
+
+function firstWorkingDir(containers) {
+  for (var i = 0; i < containers.length; i++) if (containers[i].workingDir) return containers[i].workingDir
+  return ""
+}
+
+function groupKey(hostName, project) {
+  return String(hostName) + "//" + String(project)
+}
+
+// "3/4 running" style summary for a group header.
+function groupSummary(group) {
+  if (!group) return ""
+  var c = group.counts
+  var text = c.running + "/" + c.total + " running"
+  if (c.unhealthy > 0) text += " · " + c.unhealthy + " unhealthy"
+  return text
+}
+
+// ---- ssh helpers ------------------------------------------------------------
+
+// ssh://[user@]host[:port] -> ["ssh", "-p", port, "-l", user, host]. Mirrors
+// bin/dockarchy-status so terminal actions on remote hosts reuse the user's
+// ~/.ssh/config (ControlMaster and friends) instead of docker's own transport.
+function sshArgv(endpoint) {
+  var m = /^ssh:\/\/(?:([^@\/]+)@)?([^:\/]+)(?::(\d+))?/i.exec(String(endpoint || ""))
+  if (!m) return null
+  var argv = ["ssh"]
+  if (m[3]) argv.push("-p", m[3])
+  if (m[1]) argv.push("-l", m[1])
+  argv.push("--", m[2])
+  return argv
+}
+
+// Shell-quote for embedding in a remote `ssh host <command>` string.
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'"
+}
+
+// ---- change detection (notifications) ---------------------------------------
+
+// Snapshot the bits of state worth alerting on, keyed so two polls can be
+// diffed without caring about ordering.
+function snapshot(hosts) {
+  var snap = { hosts: {}, containers: {} }
+  for (var h = 0; h < (hosts || []).length; h++) {
+    var host = hosts[h]
+    snap.hosts[host.name] = { ok: host.ok, error: host.error }
+    for (var c = 0; c < host.containers.length; c++) {
+      var k = host.containers[c]
+      snap.containers[host.name + "/" + k.id] = {
+        host: host.name, name: k.name, state: k.state, health: k.health, status: k.status, running: k.running
+      }
+    }
+  }
+  return snap
+}
+
+// Events between two snapshots. `touched` maps "host/id" keys to the verb the
+// user just ran on that container (start/stop/restart/…), so the transition
+// they asked for is not reported — while anything else still is: a container
+// that dies right after the user started it is exactly what to shout about.
+var STOP_VERBS = { stop: true, restart: true, pause: true, kill: true }
+var START_VERBS = { start: true, restart: true, unpause: true }
+
+function diffSnapshots(prev, next, touched) {
+  var events = []
+  if (!prev || !next) return events
+  var verbs = touched || {}
+  for (var name in next.hosts) {
+    var was = prev.hosts[name]
+    var now = next.hosts[name]
+    if (!was) continue
+    if (was.ok && !now.ok) events.push({ kind: "problem", type: "host-down", host: name, title: name + " unreachable", body: shortError(now.error) })
+    else if (!was.ok && now.ok) events.push({ kind: "recovery", type: "host-up", host: name, title: name + " is back", body: "Host answers again" })
+  }
+  for (var key in next.containers) {
+    var before = prev.containers[key]
+    var after = next.containers[key]
+    if (!before) continue
+    var label = after.host === "default" ? after.name : after.name + " @ " + after.host
+    if (before.health !== "unhealthy" && after.health === "unhealthy")
+      events.push({ kind: "problem", type: "unhealthy", key: key, host: after.host, title: label + " is unhealthy", body: after.status })
+    else if (before.health === "unhealthy" && after.health === "healthy")
+      events.push({ kind: "recovery", type: "healthy", key: key, host: after.host, title: label + " is healthy again", body: after.status })
+    if (before.running && !after.running && after.state !== "paused" && !STOP_VERBS[verbs[key]])
+      events.push({ kind: "problem", type: "stopped", key: key, host: after.host, title: label + " stopped", body: after.status })
+    else if (!before.running && after.running && before.state !== "paused" && before.state !== "created" && !START_VERBS[verbs[key]])
+      events.push({ kind: "recovery", type: "started", key: key, host: after.host, title: label + " is running again", body: after.status })
+  }
+  return events
+}
+
 // Python-style template for the bar label: "{running}/{total}" etc. Unknown
 // names are left in place so a typo is visible rather than silently blank;
 // "{{" and "}}" produce literal braces.
@@ -286,6 +429,8 @@ if (typeof module !== "undefined") {
     parseStatus: parseStatus, normalizeContainer: normalizeContainer, parseLabels: parseLabels,
     healthFromStatus: healthFromStatus, summarizePorts: summarizePorts, summaryText: summaryText,
     stateGlyph: stateGlyph, errorHint: errorHint, shortError: shortError,
-    formatBar: formatBar, normalizeStats: normalizeStats, formatPercent: formatPercent, shortBytes: shortBytes, statsTooltip: statsTooltip
+    formatBar: formatBar, normalizeStats: normalizeStats, formatPercent: formatPercent, shortBytes: shortBytes, statsTooltip: statsTooltip,
+    matchesQuery: matchesQuery, filterContainers: filterContainers, groupContainers: groupContainers, groupKey: groupKey, groupSummary: groupSummary,
+    sshArgv: sshArgv, shellQuote: shellQuote, snapshot: snapshot, diffSnapshots: diffSnapshots
   }
 }

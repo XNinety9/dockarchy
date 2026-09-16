@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "x99.dockarchy",
   "name": "Dockarchy",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "XNinety9",
   "license": "WTFPL",
   "description": "Docker container status for local and remote (ssh) hosts in the Omarchy bar, with CPU/memory per container, start/stop/restart, logs and shell access.",
@@ -27,7 +27,9 @@
       "barFormat": "{running}",
       "panelWidth": 700,
       "panelMaxHeight": 800,
-      "alternateRows": false
+      "alternateRows": false,
+      "groupByProject": true,
+      "notifications": "Problems"
     },
     "schema": [
       {
@@ -72,6 +74,25 @@
         "label": "Show CPU / memory per container",
         "defaultValue": true,
         "description": "Runs docker stats on each poll (adds about a second)."
+      },
+      {
+        "key": "groupByProject",
+        "type": "boolean",
+        "label": "Group by Compose project",
+        "defaultValue": true,
+        "description": "Fold containers under their docker compose project, with start/stop/restart/logs for the whole project."
+      },
+      {
+        "key": "notifications",
+        "type": "enum",
+        "label": "Desktop notifications",
+        "options": [
+          "Off",
+          "Problems",
+          "Problems and recoveries"
+        ],
+        "defaultValue": "Problems",
+        "description": "Notify when a container turns unhealthy or stops on its own, or a host stops answering. Recoveries are the way back."
       },
       {
         "key": "barFormat",

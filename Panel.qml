@@ -13,10 +13,15 @@ Panel {
   ipcTarget: "x99.dockarchy"
   manageIpc: false
 
-  // Keyboard cursor walks one flat list of rows across every host section so
-  // j/k never has to know where one server ends and the next begins.
+  // Keyboard cursor walks one flat list of rows — compose group headers and
+  // containers alike — across every host section, so j/k never has to know
+  // where one server ends and the next begins.
   property int cursorIndex: 0
   property bool cursorActive: false
+  property string query: ""
+  property bool searchOpen: false
+  // "host//project" -> true for collapsed compose groups (session-only).
+  property var collapsed: ({})
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -40,15 +45,46 @@ Panel {
   readonly property color stripeFill: Util.alpha(foreground, 0.05)
   readonly property bool alarming: docker.everRefreshed && !docker.healthy
   readonly property color barIconColor: docker.installed && docker.counts.running > 0 ? barForeground : Qt.darker(barForeground, 1.55)
+  readonly property bool filtering: query.trim() !== ""
 
-  // [{host, container}] in display order — the model the cursor indexes into.
+  // hosts -> filtered by query -> compose groups. Each view host carries
+  // `groups` ([{project, containers, counts, key, collapsed, header}]) and
+  // `matches` (containers left after filtering).
+  readonly property var viewHosts: buildViewHosts()
+  // [{kind: "group"|"container", host, group, container?}] in display order.
   readonly property var rows: flattenRows()
+  readonly property var selected: selectedRow()
 
-  function flattenRows() {
+  function buildViewHosts() {
     var out = []
     for (var h = 0; h < docker.hosts.length; h++) {
       var host = docker.hosts[h]
-      for (var c = 0; c < host.containers.length; c++) out.push({ host: host, container: host.containers[c] })
+      var containers = Model.filterContainers(host.containers, query)
+      var groups = Model.groupContainers(containers, docker.groupByProject)
+      for (var g = 0; g < groups.length; g++) {
+        groups[g].key = Model.groupKey(host.name, groups[g].project)
+        groups[g].header = groups[g].project !== ""
+        groups[g].collapsed = groups[g].header && !filtering && collapsed[groups[g].key] === true
+      }
+      out.push({ host: host, groups: groups, matches: containers.length, hidden: filtering && containers.length === 0 })
+    }
+    return out
+  }
+
+  function flattenRows() {
+    var out = []
+    for (var h = 0; h < viewHosts.length; h++) {
+      var view = viewHosts[h]
+      if (view.hidden) continue
+      for (var g = 0; g < view.groups.length; g++) {
+        var group = view.groups[g]
+        if (group.header) out.push({ kind: "group", host: view.host, group: group, key: group.key })
+        if (group.collapsed) continue
+        for (var c = 0; c < group.containers.length; c++) {
+          var container = group.containers[c]
+          out.push({ kind: "container", host: view.host, group: group, container: container, key: view.host.name + "/" + container.id })
+        }
+      }
     }
     return out
   }
@@ -75,16 +111,68 @@ Panel {
     cursorIndex = index
   }
 
-  function activateCursor() {
-    var row = selectedRow()
-    if (row) docker.toggleContainer(row.host, row.container)
+  function rowIndexOf(key) {
+    for (var i = 0; i < rows.length; i++) if (rows[i].key === key) return i
+    return -1
   }
 
-  function rowIndexOf(hostName, containerId) {
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i].host.name === hostName && rows[i].container.id === containerId) return i
+  // ⏎ / space: containers toggle start/stop, group headers fold.
+  function activateCursor() {
+    var row = selected
+    if (!row) return
+    if (row.kind === "group") toggleCollapsed(row.group)
+    else docker.toggleContainer(row.host, row.container)
+  }
+
+  function toggleCollapsed(group) {
+    if (!group || !group.header) return
+    var next = {}
+    for (var k in collapsed) next[k] = collapsed[k]
+    if (next[group.key]) delete next[group.key]
+    else next[group.key] = true
+    collapsed = next
+  }
+
+  function setAllCollapsed(value) {
+    var next = {}
+    if (value) {
+      for (var h = 0; h < viewHosts.length; h++)
+        for (var g = 0; g < viewHosts[h].groups.length; g++)
+          if (viewHosts[h].groups[g].header) next[viewHosts[h].groups[g].key] = true
     }
-    return -1
+    collapsed = next
+  }
+
+  // Row-level verbs shared by keys and buttons; groups fan out to members.
+  function rowAction(row, verb) {
+    if (!row) return
+    if (row.kind === "group") docker.groupAction(row.host, row.group, verb)
+    else if (verb === "restart") docker.restartContainer(row.host, row.container)
+    else docker.containerAction(row.host, row.container, verb)
+  }
+
+  function rowLogs(row) {
+    if (!row) return
+    if (row.kind === "group") docker.openGroupLogs(row.host, row.group)
+    else docker.openLogs(row.host, row.container)
+  }
+
+  function openSearch() {
+    searchOpen = true
+    Qt.callLater(function() { if (searchField) { searchField.forceActiveFocus(); searchField.selectAll() } })
+  }
+
+  function closeSearch(clear) {
+    if (clear) query = ""
+    searchOpen = query !== ""
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  readonly property string footerText: {
+    if (searchField && searchField.activeFocus) return "type to filter · ↑/↓ move · ⏎ back to list · Esc clear"
+    var row = selected
+    if (row && row.kind === "group") return "j/k move · ⏎ fold/unfold · u up · d down · r restart · l logs · z fold all · / search · R refresh"
+    return "j/k move · ⏎ start/stop · l logs · r restart · s shell · c copy name · / search · R refresh · L lazydocker"
   }
 
   function scrollItemIntoView(item) {
@@ -104,9 +192,9 @@ Panel {
   }
 
   function scrollCursorIntoView() {
-    var row = selectedRow()
+    var row = selected
     if (!row) return
-    var item = rowItems[row.host.name + "/" + row.container.id]
+    var item = rowItems[row.key]
     if (item) scrollItemIntoView(item)
   }
 
@@ -124,8 +212,12 @@ Panel {
     if (panelFlick) panelFlick.contentY = 0
     docker.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  } else {
+    query = ""
+    searchOpen = false
   }
   onRowsChanged: ensureCursor()
+  onQueryChanged: { cursorIndex = 0; if (filtering) cursorActive = true }
 
   Service {
     id: docker
@@ -141,15 +233,39 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { docker.refresh(); return "ok" }
     function status(): string { return docker.summaryText }
-    function version(): string { return "0.3.0" }
+    function version(): string { return "0.4.0" }
     function running(): string { return String(docker.counts.running) }
     function settings(): string { return JSON.stringify({ settings: root.settings, contexts: docker.contexts }) }
+    function rows(): string {
+      var out = []
+      for (var i = 0; i < root.rows.length; i++) {
+        var r = root.rows[i]
+        out.push((i === root.cursorIndex && root.cursorActive ? "> " : "  ") + (r.kind === "group" ? "[" + r.group.project + " " + Model.groupSummary(r.group) + "]" : "  " + r.container.name + " (" + r.container.state + ")") + " @" + r.host.name)
+      }
+      return out.join("\n")
+    }
+    function search(text: string): string { root.open(); root.query = text; root.openSearch(); return "ok" }
     // omarchy-shell x99.dockarchy action <context> <container name or id> <start|stop|restart|pause|unpause>
     function action(context: string, container: string, verb: string): string {
       var found = docker.findContainer(context, container)
       if (!found) return "unknown container: " + context + "/" + container
+      if (docker.actionRunning) return "busy"
       docker.containerAction(found.host, found.container, verb)
       return docker.pendingActionKey !== "" ? "ok" : "rejected"
+    }
+    // omarchy-shell x99.dockarchy project <context> <project> <start|stop|restart>
+    function project(context: string, project: string, verb: string): string {
+      for (var h = 0; h < root.viewHosts.length; h++) {
+        var view = root.viewHosts[h]
+        if (view.host.name !== context) continue
+        for (var g = 0; g < view.groups.length; g++) {
+          if (view.groups[g].project !== project) continue
+          if (docker.actionRunning) return "busy"
+          docker.groupAction(view.host, view.groups[g], verb)
+          return docker.pendingActionKey !== "" ? "ok" : "rejected"
+        }
+      }
+      return "unknown project: " + context + "/" + project
     }
   }
 
@@ -178,7 +294,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(root.panelWidth))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight + footer.implicitHeight, Style.space(root.panelMaxHeight))
+    contentHeight: panel.fittedContentHeight(topBlock.implicitHeight + column.implicitHeight + footer.implicitHeight + Style.space(12), Style.space(root.panelMaxHeight))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -187,24 +303,120 @@ Panel {
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) root.moveCursor(dy > 0 ? 1 : -1)
         // PanelKeyCatcher turns `l`/→ into a horizontal move before textKey
-        // ever sees it; on a container row that means "open logs".
-        else if (dx > 0) { var row = root.selectedRow(); if (row) docker.openLogs(row.host, row.container) }
+        // ever sees it; on a row that means "open logs".
+        else if (dx > 0) root.rowLogs(root.selected)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
-        var row = root.selectedRow()
-        if (t === "R") docker.refresh()
-        else if (t === "r" && row) docker.restartContainer(row.host, row.container)
-        else if (t === "s" && row) docker.openShell(row.host, row.container)
-        else if (t === "c" && row) docker.copyToClipboard(row.container.name)
+        var row = root.selected
+        if (t === "/") root.openSearch()
+        else if (t === "R") docker.refresh()
+        else if (t === "r") root.rowAction(row, "restart")
+        else if (t === "u") root.rowAction(row, "start")
+        else if (t === "d") root.rowAction(row, "stop")
+        else if (t === "z") root.setAllCollapsed(Object.keys(root.collapsed).length === 0)
+        else if (t === "s" && row && row.kind === "container") docker.openShell(row.host, row.container)
+        else if (t === "c" && row && row.kind === "container") docker.copyToClipboard(row.container.name)
         else if (t === "L") docker.openLazydocker(row ? row.host : null)
       }
 
       ColumnLayout {
         anchors.fill: parent
         spacing: 0
+
+      // Hero and search stay put; only the host list scrolls.
+      Column {
+        id: topBlock
+        Layout.fillWidth: true
+        spacing: Style.space(10)
+
+        PanelHero {
+          id: hero
+          width: parent.width
+          title: "Docker"
+          meta: docker.summaryText
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          iconOpacity: docker.installed && docker.counts.running > 0 ? 1.0 : 0.5
+          iconComponent: Component {
+            Text {
+              text: "󰡨"
+              color: root.alarming ? root.warning : root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.display
+            }
+          }
+          trailingControl: Component {
+            Row {
+              spacing: Style.space(4)
+
+              PanelActionButton {
+                iconText: "󰍉"
+                tooltipText: "Search (/)"
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                onClicked: root.openSearch()
+              }
+
+              PanelActionButton {
+                iconText: "󰑐"
+                tooltipText: "Refresh (R)"
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                enabled: !docker.refreshing
+                onClicked: docker.refresh()
+
+                NumberAnimation on rotation {
+                  running: docker.refreshing
+                  from: 0; to: 360; duration: 900
+                  loops: Animation.Infinite
+                }
+                onRotationChanged: if (!docker.refreshing && rotation !== 0) rotation = 0
+              }
+
+              PanelActionButton {
+                iconText: "󰆍"
+                tooltipText: "Open lazydocker (L)"
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                onClicked: docker.openLazydocker(null)
+              }
+            }
+          }
+        }
+
+        TextField {
+          id: searchField
+          visible: root.searchOpen
+          width: parent.width
+          foreground: root.foreground
+          placeholderText: "Filter by name, image, project, status…"
+          text: root.query
+          onTextChanged: root.query = text
+          onActiveFocusChanged: if (!activeFocus && root.query === "") root.searchOpen = false
+          Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Down) { root.moveCursor(1); event.accepted = true }
+            else if (event.key === Qt.Key_Up) { root.moveCursor(-1); event.accepted = true }
+            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { root.closeSearch(false); event.accepted = true }
+            else if (event.key === Qt.Key_Escape) { root.closeSearch(true); event.accepted = true }
+          }
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          visible: docker.actionStatus !== "" || docker.lastError !== ""
+          width: parent.width
+          text: docker.actionStatus !== "" ? docker.actionStatus : docker.lastError
+          color: docker.lastError !== "" && docker.actionStatus === "" ? root.urgent : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+      }
+
+      Item { Layout.fillWidth: true; implicitHeight: Style.space(12) }
 
       Flickable {
         id: panelFlick
@@ -222,64 +434,6 @@ Panel {
           id: column
           width: panelFlick.width
           spacing: Style.space(12)
-
-          PanelHero {
-            id: hero
-            width: parent.width
-            title: "Docker"
-            meta: docker.summaryText
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            iconOpacity: docker.installed && docker.counts.running > 0 ? 1.0 : 0.5
-            iconComponent: Component {
-              Text {
-                text: "󰡨"
-                color: root.alarming ? root.warning : root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.display
-              }
-            }
-            trailingControl: Component {
-              Row {
-                spacing: Style.space(4)
-
-                PanelActionButton {
-                  iconText: "󰑐"
-                  tooltipText: "Refresh (R)"
-                  foreground: hero.foreground
-                  fontFamily: hero.fontFamily
-                  enabled: !docker.refreshing
-                  onClicked: docker.refresh()
-
-                  NumberAnimation on rotation {
-                    running: docker.refreshing
-                    from: 0; to: 360; duration: 900
-                    loops: Animation.Infinite
-                  }
-                  onRotationChanged: if (!docker.refreshing && rotation !== 0) rotation = 0
-                }
-
-                PanelActionButton {
-                  iconText: "󰆍"
-                  tooltipText: "Open lazydocker (L)"
-                  foreground: hero.foreground
-                  fontFamily: hero.fontFamily
-                  onClicked: docker.openLazydocker(null)
-                }
-              }
-            }
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            visible: docker.actionStatus !== "" || docker.lastError !== ""
-            width: parent.width
-            text: docker.actionStatus !== "" ? docker.actionStatus : docker.lastError
-            color: docker.lastError !== "" && docker.actionStatus === "" ? root.urgent : root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
 
           CursorSurface {
             visible: !docker.installed
@@ -311,20 +465,33 @@ Panel {
             horizontalAlignment: Text.AlignHCenter
           }
 
+          Text {
+            visible: root.filtering && root.rows.length === 0 && docker.hosts.length > 0
+            width: parent.width
+            text: "No container matches \"" + root.query.trim() + "\"."
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            horizontalAlignment: Text.AlignHCenter
+          }
+
           Repeater {
-            model: docker.hosts
+            model: root.viewHosts
             HostSection {
               required property var modelData
               required property int index
               width: column.width
-              host: modelData
+              visible: !modelData.hidden
+              view: modelData
+              host: modelData.host
               hostIndex: index
             }
           }
         }
       }
 
-      // Sticky footer: stays visible however long the container list gets.
+      // Sticky footer: stays visible however long the container list gets,
+      // and describes the keys that apply to the selected row.
       Column {
         id: footer
         Layout.fillWidth: true
@@ -336,8 +503,9 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
-          text: "j/k move · ⏎ start/stop · l logs · r restart · s shell · c copy name · R refresh · L lazydocker"
+          text: root.footerText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -351,6 +519,7 @@ Panel {
 
   component HostSection: Column {
     id: section
+    property var view: null
     property var host: null
     property int hostIndex: 0
     readonly property string hostName: host ? String(host.name) : ""
@@ -400,7 +569,11 @@ Panel {
       Text {
         textFormat: Text.PlainText
         visible: section.host && section.host.ok
-        text: section.host ? section.host.counts.running + "/" + section.host.counts.total : ""
+        text: {
+          if (!section.host) return ""
+          var base = section.host.counts.running + "/" + section.host.counts.total
+          return root.filtering && section.view ? section.view.matches + " match · " + base : base
+        }
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -469,15 +642,146 @@ Panel {
       spacing: Style.space(6)
 
       Repeater {
-        model: section.host ? section.host.containers : []
-        ContainerRow {
+        model: section.view ? section.view.groups : []
+        Column {
+          id: groupColumn
           required property var modelData
-          required property int index
           width: parent.width
-          host: section.host
-          container: modelData
-          striped: root.alternateRows && index % 2 === 1
+          spacing: Style.space(6)
+
+          GroupRow {
+            visible: groupColumn.modelData.header
+            width: parent.width
+            host: section.host
+            group: groupColumn.modelData
+          }
+
+          Repeater {
+            model: groupColumn.modelData.collapsed ? [] : groupColumn.modelData.containers
+            ContainerRow {
+              required property var modelData
+              required property int index
+              width: parent.width
+              host: section.host
+              group: groupColumn.modelData
+              container: modelData
+              indented: groupColumn.modelData.header
+              striped: root.alternateRows && index % 2 === 1
+            }
+          }
         }
+      }
+    }
+  }
+
+  // Compose project header: fold/unfold, counts, and whole-project actions.
+  component GroupRow: CursorSurface {
+    id: groupRow
+    property var host: null
+    property var group: null
+    readonly property string key: group ? group.key : ""
+    readonly property int flatIndex: key !== "" ? root.rowIndexOf(key) : -1
+    readonly property bool pending: docker.isGroupPending(host, group)
+    readonly property bool anyRunning: group && group.counts.running > 0
+    readonly property bool allRunning: group && group.counts.running === group.counts.total
+    readonly property bool unhealthy: group && group.counts.unhealthy > 0
+
+    hasCursor: root.cursorActive && root.cursorIndex === flatIndex && flatIndex >= 0
+    foreground: root.foreground
+    fill: root.hoverFill
+    implicitHeight: groupContent.implicitHeight + Style.spacing.rowPaddingX
+
+    Component.onCompleted: if (key !== "") root.registerRow(key, groupRow)
+    Component.onDestruction: if (key !== "") root.unregisterRow(key)
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onContainsMouseChanged: if (containsMouse && groupRow.flatIndex >= 0) root.setCursor(groupRow.flatIndex)
+      onClicked: root.toggleCollapsed(groupRow.group)
+    }
+
+    RowLayout {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(8)
+      anchors.rightMargin: Style.space(6)
+      spacing: Style.space(8)
+
+      Text {
+        textFormat: Text.PlainText
+        text: groupRow.group && groupRow.group.collapsed ? "󰅂" : "󰅀"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+        opacity: groupRow.pending ? 0.45 : 1.0
+
+        SequentialAnimation on opacity {
+          running: groupRow.pending
+          loops: Animation.Infinite
+          NumberAnimation { to: 1.0; duration: 420; easing.type: Easing.InOutQuad }
+          NumberAnimation { to: 0.45; duration: 420; easing.type: Easing.InOutQuad }
+        }
+      }
+
+      ColumnLayout {
+        id: groupContent
+        Layout.fillWidth: true
+        spacing: Style.space(1)
+
+        Text {
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          text: groupRow.group ? groupRow.group.project : ""
+          color: groupRow.anyRunning ? root.foreground : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: true
+          elide: Text.ElideRight
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          text: Model.groupSummary(groupRow.group) + (groupRow.group && groupRow.group.workingDir ? " · " + groupRow.group.workingDir : "")
+          color: groupRow.unhealthy ? root.warning : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideMiddle
+        }
+      }
+
+      PanelActionButton {
+        iconText: "󰈙"
+        tooltipText: "Project logs"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        Layout.alignment: Qt.AlignVCenter
+        onClicked: docker.openGroupLogs(groupRow.host, groupRow.group)
+      }
+
+      PanelActionButton {
+        iconText: "󰑐"
+        tooltipText: "Restart project"
+        visible: groupRow.anyRunning
+        enabled: !docker.busy
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        Layout.alignment: Qt.AlignVCenter
+        onClicked: docker.groupAction(groupRow.host, groupRow.group, "restart")
+      }
+
+      PanelActionButton {
+        iconText: groupRow.allRunning ? "󰓛" : "󰐊"
+        tooltipText: groupRow.allRunning ? "Stop project (d)" : "Start project (u)"
+        enabled: !docker.busy
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        Layout.alignment: Qt.AlignVCenter
+        onClicked: docker.groupAction(groupRow.host, groupRow.group, groupRow.allRunning ? "stop" : "start")
       }
     }
   }
@@ -485,11 +789,13 @@ Panel {
   component ContainerRow: CursorSurface {
     id: row
     property var host: null
+    property var group: null
     property var container: null
     property bool striped: false
+    property bool indented: false
     readonly property string key: host && container ? String(host.name) + "/" + String(container.id) : ""
-    readonly property int flatIndex: host && container ? root.rowIndexOf(host.name, container.id) : -1
-    readonly property bool pending: docker.isPending(host, container)
+    readonly property int flatIndex: key !== "" ? root.rowIndexOf(key) : -1
+    readonly property bool pending: docker.isPending(host, container) || docker.isGroupPending(host, group)
     readonly property bool unhealthy: container && (container.health === "unhealthy" || container.state === "dead")
     readonly property color stateColor: {
       if (!container) return root.dim
@@ -507,7 +813,8 @@ Panel {
     readonly property string statusText: {
       if (!container) return ""
       var s = container.status
-      if (container.project !== "") s = container.project + " · " + s
+      if (container.project !== "" && !(group && group.header)) s = container.project + " · " + s
+      if (container.service !== "" && group && group.header && container.service !== container.name) s = container.service + " · " + s
       return s
     }
 
@@ -536,7 +843,7 @@ Panel {
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(10)
+      anchors.leftMargin: Style.space(row.indented ? 22 : 10)
       anchors.rightMargin: Style.space(6)
       spacing: Style.space(8)
 

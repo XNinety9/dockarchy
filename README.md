@@ -5,9 +5,10 @@ local daemon *and* your remote servers, in one popup.
 
 Every host is a plain **Docker context**. The local socket is the `default`
 context; a remote server is a context with an `ssh://` endpoint. Dockarchy
-polls all of them in parallel and shows one section per host, with CPU and
-memory per container, and lets you start, stop, restart, tail logs or open a
-shell without leaving the bar.
+polls all of them in parallel and shows one section per host, containers
+folded under their Compose projects, with CPU and memory per container. Start,
+stop, restart, tail logs or open a shell — per container or per project —
+search across hosts, and get a desktop notification when something breaks.
 
 ![Dockarchy panel](preview.png)
 
@@ -100,25 +101,48 @@ logs, shell — still go through `docker --context`, which is a single request.
 
 | Target        | Mouse                                                                  |
 |---------------|------------------------------------------------------------------------|
-| Header        | Refresh button · lazydocker button                                     |
+| Header        | Search · refresh · lazydocker buttons                                  |
 | Host header   | lazydocker button for that host                                        |
+| Project row   | Click to fold/unfold · buttons: project logs · restart · start/stop all |
 | Container row | Buttons, left to right: logs · shell · restart · start/stop · middle-click copies the name |
 | Stats column  | Hover for memory limit, network I/O, disk I/O and PIDs                 |
 
-| Key       | Action                                            |
-|-----------|---------------------------------------------------|
-| `j` / `k` | Move between containers (across hosts)            |
-| `⏎`       | Start / stop the selected container               |
-| `l` / `→` | Tail logs in a terminal                           |
-| `r`       | Restart                                           |
-| `s`       | Shell into the container (`bash`, falling back to `sh`) |
-| `c`       | Copy the container name                           |
-| `R`       | Refresh                                           |
-| `L`       | lazydocker for the selected host                  |
-| `Esc`     | Close                                             |
+| Key       | On a container                        | On a project row                 |
+|-----------|---------------------------------------|----------------------------------|
+| `j` / `k` | Move (across projects and hosts)      | Move                             |
+| `⏎`       | Start / stop                          | Fold / unfold                    |
+| `u` / `d` | Start / stop                          | Start / stop every container     |
+| `r`       | Restart                               | Restart the running ones         |
+| `l` / `→` | Tail logs in a terminal               | `docker compose logs -f`         |
+| `s`       | Shell (`bash`, falling back to `sh`)  | —                                |
+| `c`       | Copy the container name               | —                                |
+| `z`       | Fold / unfold every project           | Fold / unfold every project      |
+| `/`       | Search                                | Search                           |
+| `R`       | Refresh                               | Refresh                          |
+| `L`       | lazydocker for the selected host      | lazydocker for the selected host |
+| `Esc`     | Close                                 | Close                            |
 
-The shortcut reminder at the bottom of the panel is always visible. Logs and
-shells open through `omarchy-launch-tui`, so they use your default terminal.
+**Search** (`/`): every word you type must match somewhere in the name, image,
+project, service, state or status line — `unhealthy` lists the sick ones on
+every host, `nginx blog` narrows to a project. `↑`/`↓` move the cursor while
+typing, `⏎` returns to the list, `Esc` clears. Hosts without a match are hidden.
+
+The shortcut reminder at the bottom of the panel is always visible and follows
+the selected row. Logs and shells open through `omarchy-launch-tui`, so they
+use your default terminal; on remote hosts they run over your own `ssh` config.
+
+### Notifications
+
+Dockarchy compares each poll with the previous one and sends a desktop
+notification (with its own icon) when:
+
+- a container turns **unhealthy** or stops **on its own** — never for a stop,
+  restart or start you asked for from the panel or its IPC;
+- a host stops answering.
+
+Set `notifications` to `Problems and recoveries` to also hear when a container
+is healthy or running again, or a host is back. Health flaps are debounced
+(2 min per container), stops 20 s. `Off` disables it.
 
 ### What the colours mean
 
@@ -142,6 +166,8 @@ them there, in the shell's settings UI, or with
 | `timeoutSec`         | `10`        | Per-host limit before it is marked unreachable.                    |
 | `showAll`            | `true`      | Include stopped containers (`docker ps -a`).                       |
 | `showStats`          | `true`      | CPU % and memory per running container (`docker stats`, about a second extra per poll). |
+| `groupByProject`     | `true`      | Fold containers under their Compose project with project-level actions. |
+| `notifications`      | `Problems`  | `Off`, `Problems`, or `Problems and recoveries` — see Notifications above. |
 | `barFormat`          | `{running}` | Label next to the whale (see below). Empty = icon only.            |
 | `panelWidth`         | `700`       | Popup width in px (300–1400).                                      |
 | `panelMaxHeight`     | `800`       | The popup grows with its content up to this, then scrolls.        |
@@ -177,8 +203,11 @@ omarchy-shell x99.dockarchy toggle | open | close | refresh
 omarchy-shell x99.dockarchy status      # "27 running · 1 stopped · 1 unhealthy · 2 hosts"
 omarchy-shell x99.dockarchy running     # "27"
 omarchy-shell x99.dockarchy action <context> <name|id> <start|stop|restart|pause|unpause>
+omarchy-shell x99.dockarchy project <context> <project> <start|stop|restart>
+omarchy-shell x99.dockarchy search <text>   # open the panel with a filter
 omarchy-shell x99.dockarchy version
 omarchy-shell x99.dockarchy settings    # resolved settings, for debugging
+omarchy-shell x99.dockarchy rows        # what the panel currently lists, for debugging
 ```
 
 Handy for a Hyprland keybinding in `~/.config/hypr/bindings.lua`:
@@ -193,7 +222,8 @@ o.bind("SUPER + SHIFT + D", "Docker containers", "omarchy-shell x99.dockarchy to
 manifest.json           plugin id, defaults and settings schema
 Panel.qml               bar button + popup: rows, cursor, keys, footer
 Service.qml             polling, actions, timers, watchdog
-Model.js                pure JS parsing/formatting — testable with node
+Model.js                pure JS parsing, filtering, grouping, diffing — testable with node
+assets/                 notification icons
 bin/dockarchy-status    queries every context in parallel (one ssh session per
                         remote host) and prints a single JSON document
 bin/dockarchy-contexts  lists context names for the settings picker
@@ -222,6 +252,9 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
+- **0.4.0** — search across hosts (`/`); containers grouped by Compose project
+  with fold and project-wide start/stop/restart/logs; desktop notifications on
+  unhealthy, unexpected stop or unreachable host, with recoveries optional.
 - **0.3.0** — sticky shortcut footer; configurable panel size, bar label
   template and alternating row shading.
 - **0.2.0** — CPU/memory per container; `l` opens logs; softer warning colour;
