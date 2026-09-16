@@ -9,14 +9,15 @@ polls all of them in parallel and shows one section per host, with CPU and
 memory per container, and lets you start, stop, restart, tail logs or open a
 shell without leaving the bar.
 
-![Dockarchy panel](docs/screenshot.png)
+![Dockarchy panel](preview.png)
 
 ## Requirements
 
 - Omarchy 4.x (the Quickshell-based `omarchy-shell`).
 - `docker` CLI and `jq` locally; `timeout` and `wl-copy` come with Omarchy.
-- Access to the local socket without sudo: `omarchy setup security sudoless-docker`,
-  then log out and back in.
+- Your user must be able to talk to the Docker socket directly. On Omarchy run
+  `omarchy setup security sudoless-docker`, then log out and back in. No sudo or
+  pkexec is required or used by the plugin itself.
 - Optional: `lazydocker` for the terminal buttons on the header, host headers and bar icon.
 - For remote hosts: `ssh <host>` must work non-interactively (keys,
   `~/.ssh/config`), and your remote user must be able to run `docker`.
@@ -37,6 +38,20 @@ omarchy bar move x99.dockarchy --before omarchy.network
 Manual install works too: copy the folder to
 `~/.config/omarchy/plugins/x99.dockarchy/`, run `omarchy-shell shell rescanPlugins`,
 then `omarchy plugin enable x99.dockarchy`.
+
+The plugin only reads: it never writes outside its own settings entry, which
+Omarchy manages in `~/.config/omarchy/shell.json` when you change a setting.
+
+## Uninstall
+
+```bash
+omarchy plugin remove x99.dockarchy
+```
+
+This deletes `~/.config/omarchy/plugins/x99.dockarchy/` and drops the widget
+from the bar. Docker contexts you created (`docker context ls`) and any
+`~/.ssh/config` entries are yours and are left untouched; remove a context with
+`docker context rm <name>` if you no longer want it.
 
 ## Adding a remote server
 
@@ -216,4 +231,4 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[WTFPL](LICENSE) — do what you want with it.

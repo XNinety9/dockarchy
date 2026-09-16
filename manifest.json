@@ -3,9 +3,9 @@
   "id": "x99.dockarchy",
   "name": "Dockarchy",
   "version": "0.3.0",
-  "author": "x99",
-  "license": "MIT",
-  "description": "Docker container status for local and remote hosts in the Omarchy bar, with start/stop/restart, logs and shell access.",
+  "author": "XNinety9",
+  "license": "WTFPL",
+  "description": "Docker container status for local and remote (ssh) hosts in the Omarchy bar, with CPU/memory per container, start/stop/restart, logs and shell access.",
   "kinds": [
     "bar-widget"
   ],
