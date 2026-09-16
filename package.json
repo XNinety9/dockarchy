@@ -1,0 +1,11 @@
+{
+  "name": "dockarchy",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Docker container status for local and remote hosts in the Omarchy bar.",
+  "license": "WTFPL",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

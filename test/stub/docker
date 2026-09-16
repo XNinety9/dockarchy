@@ -1,0 +1,32 @@
+#!/bin/bash
+# Fake docker CLI for testing bin/dockarchy-status without a daemon.
+# Behaviour is driven by DOCKARCHY_STUB_MODE:
+#   ok      (default) two containers, one with stats
+#   fail    `docker ps` fails like an unreachable daemon
+#   hang    `docker ps` never returns (to exercise --timeout)
+mode="${DOCKARCHY_STUB_MODE:-ok}"
+ctx=""
+if [[ ${1:-} == "--context" ]]; then ctx="$2"; shift 2; fi
+ctx="${ctx:-${DOCKER_CONTEXT:-default}}"
+
+case "$1 $2" in
+  "context ls")
+    printf 'default\tunix:///var/run/docker.sock\n'
+    printf 'remote\tssh://me@remote.example\n'
+    ;;
+  "ps "*|"ps")
+    case "$mode" in
+      fail) echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1 ;;
+      hang) sleep 60 ;;
+    esac
+    printf '{"ID":"%s","Names":"web-%s","Image":"nginx:alpine","State":"running","Status":"Up 3 hours (healthy)","Ports":"0.0.0.0:8080->80/tcp","Labels":"com.docker.compose.project=demo,com.docker.compose.service=web","CreatedAt":"2026-09-16 10:00:00 +0200 CEST"}\n' "$(printf 'a%.0s' {1..64})" "$ctx"
+    printf '{"ID":"%s","Names":"job-%s","Image":"alpine","State":"exited","Status":"Exited (0) 2 days ago","Ports":"","Labels":"","CreatedAt":"2026-09-14 10:00:00 +0200 CEST"}\n' "$(printf 'b%.0s' {1..64})" "$ctx"
+    ;;
+  "stats "*)
+    printf '{"BlockIO":"0B / 0B","CPUPerc":"0.42%%","Container":"%s","ID":"aaaaaaaaaaaa","MemPerc":"0.03%%","MemUsage":"20.7MiB / 62.4GiB","Name":"web-%s","NetIO":"1kB / 2kB","PIDs":"9"}\n' "$(printf 'a%.0s' {1..64})" "$ctx"
+    ;;
+  *)
+    echo "stub docker: unsupported: $*" >&2
+    exit 2
+    ;;
+esac

@@ -224,6 +224,7 @@ Panel.qml               bar button + popup: rows, cursor, keys, footer
 Service.qml             polling, actions, timers, watchdog
 Model.js                pure JS parsing, filtering, grouping, diffing — testable with node
 assets/                 notification icons
+test/                   node --test suites and the stub docker/ssh they run against
 bin/dockarchy-status    queries every context in parallel (one ssh session per
                         remote host) and prints a single JSON document
 bin/dockarchy-contexts  lists context names for the settings picker
@@ -231,6 +232,17 @@ bin/dockarchy-contexts  lists context names for the settings picker
 
 `bin/dockarchy-status --all --stats --timeout 5 [ctx ...] | jq .` shows exactly
 what the widget sees.
+
+### Tests
+
+```bash
+node --test          # or: npm test
+```
+
+`test/model.test.mjs` covers the pure logic in `Model.js`; `test/status.test.mjs`
+runs the collector against a stub `docker` and `ssh` in `test/stub/`, so the
+parallel query, ssh dispatch, stats merge, error and timeout paths are checked
+without a daemon. CI runs the same plus shell syntax, manifest and icon checks.
 
 ### Demo stack
 
@@ -254,7 +266,8 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 - **0.4.0** — search across hosts (`/`); containers grouped by Compose project
   with fold and project-wide start/stop/restart/logs; desktop notifications on
-  unhealthy, unexpected stop or unreachable host, with recoveries optional.
+  unhealthy, unexpected stop or unreachable host, with recoveries optional;
+  test suite and CI.
 - **0.3.0** — sticky shortcut footer; configurable panel size, bar label
   template and alternating row shading.
 - **0.2.0** — CPU/memory per container; `l` opens logs; softer warning colour;

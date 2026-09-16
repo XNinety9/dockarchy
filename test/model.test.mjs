@@ -1,0 +1,148 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { Model, psRow, composeLabels } from "./load-model.mjs";
+
+test("parseStatus handles the collector's shapes", () => {
+  assert.equal(Model.parseStatus("").ok, false);
+  assert.equal(Model.parseStatus("not json").ok, false);
+  assert.equal(Model.parseStatus('{"installed":false}').installed, false);
+
+  const parsed = Model.parseStatus(JSON.stringify({
+    installed: true,
+    hosts: [
+      { name: "default", endpoint: "unix:///var/run/docker.sock", ok: true, error: "", containers: [psRow(), psRow({ Names: "db", State: "exited", Status: "Exited (0) 2 days ago", ID: "ff".repeat(32) })] },
+      { name: "srv", endpoint: "ssh://me@srv", ok: false, error: "Timed out after 10s", containers: [] },
+    ],
+  }));
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.hosts.length, 2);
+  assert.equal(parsed.hosts[0].remote, false);
+  assert.equal(parsed.hosts[1].remote, true);
+  assert.deepEqual(parsed.counts, { total: 2, running: 1, stopped: 1, unhealthy: 0, hosts: 2, unreachable: 1 });
+});
+
+test("normalizeContainer extracts health, ports, compose labels and stats", () => {
+  const c = Model.normalizeContainer(psRow({
+    Status: "Up 2 minutes (unhealthy)",
+    Labels: composeLabels("blog", "web"),
+    Stats: { CPUPerc: "1.50%", MemPerc: "0.30%", MemUsage: "20.72MiB / 62.39GiB", NetIO: "1kB / 2kB", BlockIO: "0B / 0B", PIDs: "12" },
+  }));
+  assert.equal(c.shortId, "0123456789ab");
+  assert.equal(c.health, "unhealthy");
+  assert.equal(c.running, true);
+  assert.equal(c.ports, "8080->80");
+  assert.equal(c.project, "blog");
+  assert.equal(c.service, "web");
+  assert.equal(c.workingDir, "/srv/blog");
+  assert.equal(c.stats.cpu, 1.5);
+  assert.equal(c.stats.memUsed, "20.72MiB");
+  assert.equal(c.stats.memLimit, "62.39GiB");
+  assert.equal(c.stats.pids, 12);
+  assert.equal(Model.normalizeContainer(psRow({ Stats: null })).stats, null);
+});
+
+test("health and port parsing edge cases", () => {
+  assert.equal(Model.healthFromStatus("Up 2 minutes (health: starting)"), "starting");
+  assert.equal(Model.healthFromStatus("Up 2 minutes"), "");
+  assert.equal(Model.summarizePorts("0.0.0.0:18080->80/tcp, [::]:18080->80/tcp, 5432/tcp"), "18080->80, 5432");
+  assert.equal(Model.summarizePorts(""), "");
+});
+
+test("containers sort running first, then by name", () => {
+  const host = Model.parseStatus(JSON.stringify({ installed: true, hosts: [{ name: "d", ok: true, containers: [
+    psRow({ Names: "zeta", State: "exited" }), psRow({ Names: "beta" }), psRow({ Names: "alpha" }), psRow({ Names: "gamma", State: "restarting" }),
+  ] }] })).hosts[0];
+  assert.deepEqual(host.containers.map((c) => c.name), ["alpha", "beta", "gamma", "zeta"]);
+});
+
+test("summaryText and formatBar", () => {
+  const counts = { total: 30, running: 27, stopped: 2, unhealthy: 1, unreachable: 0, hosts: 2 };
+  assert.equal(Model.summaryText(counts, true), "27 running · 2 stopped · 1 unhealthy · 2 hosts");
+  assert.equal(Model.summaryText(null, false), "Docker CLI is not installed");
+  assert.equal(Model.formatBar("{running}/{total}", counts), "27/30");
+  assert.equal(Model.formatBar("{running} up, {errors} err", counts), "27 up, 1 err");
+  assert.equal(Model.formatBar("{{x}} {nope} {Hosts}", counts), "{x} {nope} 2");
+  assert.equal(Model.formatBar("", counts), "");
+});
+
+test("number formatting", () => {
+  assert.equal(Model.formatPercent(0.37), "0.37%");
+  assert.equal(Model.formatPercent(12.345), "12.3%");
+  assert.equal(Model.formatPercent(0), "0%");
+  assert.equal(Model.formatPercent(-1), "–");
+  assert.equal(Model.shortBytes("20.72MiB"), "20.7M");
+  assert.equal(Model.shortBytes("1.234GiB"), "1.23G");
+  assert.equal(Model.shortBytes("512KiB"), "512K");
+  assert.equal(Model.shortBytes("0B"), "0B");
+});
+
+test("errors get shortened and hinted", () => {
+  assert.match(Model.errorHint("permission denied while trying to connect"), /sudoless-docker/);
+  assert.match(Model.errorHint("Timed out after 10s"), /SSH/);
+  assert.equal(Model.errorHint("something else"), "");
+  assert.equal(Model.shortError("Failed to initialize: boom"), "boom");
+  assert.equal(Model.shortError("x".repeat(200)).length, 158);
+});
+
+const fleet = [
+  psRow({ Names: "blog-web", Image: "nginx", Labels: composeLabels("blog", "web") }),
+  psRow({ Names: "blog-db", Image: "postgres", Status: "Up 1h (unhealthy)", Labels: composeLabels("blog", "db"), ID: "aa".repeat(32) }),
+  psRow({ Names: "solo", Image: "alpine", ID: "bb".repeat(32) }),
+  psRow({ Names: "app-api", Image: "python", Labels: composeLabels("app", "api"), ID: "cc".repeat(32) }),
+].map(Model.normalizeContainer);
+
+test("matchesQuery is case-insensitive and needs every word", () => {
+  assert.deepEqual(Model.filterContainers(fleet, "nginx").map((c) => c.name), ["blog-web"]);
+  assert.deepEqual(Model.filterContainers(fleet, "BLOG unhealthy").map((c) => c.name), ["blog-db"]);
+  assert.deepEqual(Model.filterContainers(fleet, "8080").length, 4);
+  assert.equal(Model.filterContainers(fleet, "").length, 4);
+  assert.equal(Model.filterContainers(fleet, "nothing-here").length, 0);
+});
+
+test("groupContainers: projects alphabetical, standalone last, off = one anonymous group", () => {
+  const groups = Model.groupContainers(fleet, true);
+  assert.deepEqual(groups.map((g) => g.project), ["app", "blog", ""]);
+  assert.equal(groups[1].counts.unhealthy, 1);
+  assert.equal(groups[1].workingDir, "/srv/blog");
+  assert.equal(Model.groupSummary(groups[1]), "2/2 running · 1 unhealthy");
+  assert.equal(Model.groupContainers(fleet, false).length, 1);
+  assert.equal(Model.groupKey("srv", "blog"), "srv//blog");
+});
+
+test("ssh helpers", () => {
+  assert.deepEqual(Model.sshArgv("ssh://x99@x99.fr"), ["ssh", "-l", "x99", "--", "x99.fr"]);
+  assert.deepEqual(Model.sshArgv("ssh://host:2222"), ["ssh", "-p", "2222", "--", "host"]);
+  assert.equal(Model.sshArgv("unix:///var/run/docker.sock"), null);
+  assert.equal(Model.shellQuote("it's"), `'it'\\''s'`);
+});
+
+function snapOf(containers, hostOk = true) {
+  return Model.snapshot([{ name: "default", ok: hostOk, error: hostOk ? "" : "Timed out after 10s", containers }]);
+}
+
+test("diffSnapshots reports problems and recoveries", () => {
+  const running = fleet;
+  const later = fleet.map((c, i) => i === 0 ? { ...c, running: false, state: "exited", status: "Exited (1) 2s ago" } : i === 1 ? { ...c, health: "healthy" } : c);
+  const events = Model.diffSnapshots(snapOf(running), snapOf(later, false), {});
+  assert.deepEqual(events.map((e) => `${e.kind}/${e.type}`).sort(), ["problem/host-down", "problem/stopped", "recovery/healthy"]);
+  assert.equal(events.find((e) => e.type === "stopped").title, "blog-web stopped");
+});
+
+test("diffSnapshots honours the verb the user ran", () => {
+  const before = fleet;
+  const after = fleet.map((c, i) => i === 0 ? { ...c, running: false, state: "exited" } : c);
+  const key = "default/" + fleet[0].id;
+  assert.equal(Model.diffSnapshots(snapOf(before), snapOf(after), { [key]: "stop" }).length, 0);
+  assert.equal(Model.diffSnapshots(snapOf(before), snapOf(after), { [key]: "restart" }).length, 0);
+  // A container that dies right after the user started it is still news.
+  assert.equal(Model.diffSnapshots(snapOf(before), snapOf(after), { [key]: "start" }).length, 1);
+  // No baseline, no events.
+  assert.equal(Model.diffSnapshots(null, snapOf(after), {}).length, 0);
+});
+
+test("glyphs", () => {
+  assert.equal(Model.stateGlyph({ running: true, state: "running", health: "" }), "󰐊");
+  assert.equal(Model.stateGlyph({ running: true, state: "running", health: "unhealthy" }), "󰀦");
+  assert.equal(Model.stateGlyph({ running: false, state: "exited", health: "" }), "󰓛");
+  assert.equal(Model.hostGlyph({ remote: true }), "󰒋");
+});

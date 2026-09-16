@@ -428,7 +428,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     parseStatus: parseStatus, normalizeContainer: normalizeContainer, parseLabels: parseLabels,
     healthFromStatus: healthFromStatus, summarizePorts: summarizePorts, summaryText: summaryText,
-    stateGlyph: stateGlyph, errorHint: errorHint, shortError: shortError,
+    stateGlyph: stateGlyph, hostGlyph: hostGlyph, errorHint: errorHint, shortError: shortError,
     formatBar: formatBar, normalizeStats: normalizeStats, formatPercent: formatPercent, shortBytes: shortBytes, statsTooltip: statsTooltip,
     matchesQuery: matchesQuery, filterContainers: filterContainers, groupContainers: groupContainers, groupKey: groupKey, groupSummary: groupSummary,
     sshArgv: sshArgv, shellQuote: shellQuote, snapshot: snapshot, diffSnapshots: diffSnapshots

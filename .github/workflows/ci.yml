@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Shell syntax
+        run: bash -n bin/dockarchy-status bin/dockarchy-contexts test/stub/docker test/stub/ssh
+
+      - name: Manifest is valid JSON with the required fields
+        run: |
+          jq -e '
+            .schemaVersion == 1 and (.id|type) == "string" and (.name|type) == "string"
+            and (.version|type) == "string" and (.author|type) == "string"
+            and (.description|type) == "string" and (.kinds|type) == "array"
+            and (.entryPoints.barWidget|type) == "string"
+          ' manifest.json
+          test -f "$(jq -r .entryPoints.barWidget manifest.json)"
+
+      - name: Notification icons are well-formed XML
+        run: for f in assets/*.svg; do xmllint --noout "$f"; done
+
+      - name: README does not reference Nerd Font private-use glyphs
+        run: |
+          if grep -nP '[\x{E000}-\x{F8FF}\x{F0000}-\x{FFFFD}]' README.md; then
+            echo "Private-use glyphs render only with the bar font, not on GitHub." >&2
+            exit 1
+          fi
+
+      - name: Unit and collector tests
+        run: node --test
