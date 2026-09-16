@@ -20,8 +20,39 @@ Panel {
   property bool cursorActive: false
   property string query: ""
   property bool searchOpen: false
-  // "host//project" -> true for collapsed compose groups (session-only).
-  property var collapsed: ({})
+  property bool menuOpen: false
+  property bool confirmOpen: false
+
+  // Folded groups/hosts and per-host "hide stopped" live in the widget's
+  // shell.json entry as comma-separated lists, so they survive restarts.
+  readonly property var collapsedGroups: docker.listSetting("collapsedGroups")
+  readonly property var collapsedHosts: docker.listSetting("collapsedHosts")
+  readonly property var hideStoppedHosts: docker.listSetting("hideStoppedHosts")
+  readonly property string sortBy: docker.stringSetting("sortBy", "State")
+
+  // Merge a patch into the widget's settings entry through the shell, which
+  // rewrites shell.json; `settings` then flows back in and rebuilds the view.
+  function persist(patch) {
+    if (!root.bar || !root.bar.shell || typeof root.bar.shell.updateEntryInline !== "function") return
+    var entry = { id: root.moduleName }
+    for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
+    for (var k in patch) {
+      var v = patch[k]
+      entry[k] = v && typeof v.length === "number" && typeof v !== "string" ? v.join(",") : v
+    }
+    root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function listToggle(list, value) {
+    var next = []
+    var found = false
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] === value) found = true
+      else next.push(list[i])
+    }
+    if (!found) next.push(value)
+    return next
+  }
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -59,14 +90,25 @@ Panel {
     var out = []
     for (var h = 0; h < docker.hosts.length; h++) {
       var host = docker.hosts[h]
-      var containers = Model.filterContainers(host.containers, query)
+      var hideStopped = hideStoppedHosts.indexOf(host.name) !== -1 && !filtering
+      var visible = []
+      var hiddenCount = 0
+      for (var i = 0; i < host.containers.length; i++) {
+        if (hideStopped && !host.containers[i].running) hiddenCount++
+        else visible.push(host.containers[i])
+      }
+      var containers = Model.sortContainers(Model.filterContainers(visible, query), sortBy)
       var groups = Model.groupContainers(containers, docker.groupByProject)
       for (var g = 0; g < groups.length; g++) {
         groups[g].key = Model.groupKey(host.name, groups[g].project)
         groups[g].header = groups[g].project !== ""
-        groups[g].collapsed = groups[g].header && !filtering && collapsed[groups[g].key] === true
+        groups[g].collapsed = groups[g].header && !filtering && collapsedGroups.indexOf(groups[g].key) !== -1
       }
-      out.push({ host: host, groups: groups, matches: containers.length, hidden: filtering && containers.length === 0 })
+      out.push({
+        host: host, groups: groups, matches: containers.length, hiddenStopped: hiddenCount,
+        hideStopped: hideStopped, collapsed: !filtering && collapsedHosts.indexOf(host.name) !== -1,
+        hidden: filtering && containers.length === 0
+      })
     }
     return out
   }
@@ -76,6 +118,8 @@ Panel {
     for (var h = 0; h < viewHosts.length; h++) {
       var view = viewHosts[h]
       if (view.hidden) continue
+      out.push({ kind: "host", host: view.host, view: view, key: "host:" + view.host.name })
+      if (view.collapsed) continue
       for (var g = 0; g < view.groups.length; g++) {
         var group = view.groups[g]
         if (group.header) out.push({ kind: "group", host: view.host, group: group, key: group.key })
@@ -116,43 +160,90 @@ Panel {
     return -1
   }
 
-  // ⏎ / space: containers toggle start/stop, group headers fold.
+  // ⏎ / space: containers toggle start/stop, group and host headers fold.
   function activateCursor() {
     var row = selected
     if (!row) return
     if (row.kind === "group") toggleCollapsed(row.group)
+    else if (row.kind === "host") toggleHostCollapsed(row.host)
     else docker.toggleContainer(row.host, row.container)
   }
 
   function toggleCollapsed(group) {
     if (!group || !group.header) return
-    var next = {}
-    for (var k in collapsed) next[k] = collapsed[k]
-    if (next[group.key]) delete next[group.key]
-    else next[group.key] = true
-    collapsed = next
+    persist({ collapsedGroups: listToggle(collapsedGroups, group.key) })
   }
 
   function setAllCollapsed(value) {
-    var next = {}
+    var next = []
     if (value) {
       for (var h = 0; h < viewHosts.length; h++)
         for (var g = 0; g < viewHosts[h].groups.length; g++)
-          if (viewHosts[h].groups[g].header) next[viewHosts[h].groups[g].key] = true
+          if (viewHosts[h].groups[g].header) next.push(viewHosts[h].groups[g].key)
     }
-    collapsed = next
+    persist({ collapsedGroups: next })
+  }
+
+  function toggleHostCollapsed(host) {
+    if (!host) return
+    persist({ collapsedHosts: listToggle(collapsedHosts, host.name) })
+  }
+
+  function toggleHideStopped(host) {
+    if (!host) return
+    persist({ hideStoppedHosts: listToggle(hideStoppedHosts, host.name) })
+  }
+
+  function cycleSort() {
+    persist({ sortBy: Model.nextSortMode(sortBy) })
+  }
+
+  function openFirstPort(row) {
+    if (!row || row.kind !== "container" || row.container.published.length === 0) return
+    docker.openPort(row.host, row.container.published[0])
+  }
+
+  // x on a container: kill it if running, remove it if not — after asking.
+  function requestDestroy(row) {
+    if (!row || row.kind !== "container") return
+    var verb = row.container.running ? "kill" : "rm"
+    confirm.pendingVerb = verb
+    confirm.pendingRow = row
+    confirm.message = (verb === "kill" ? "Kill " : "Remove ") + row.container.name + " on " + row.host.name + "?"
+    confirm.confirmText = verb === "kill" ? "Kill" : "Remove"
+    confirm.selectedIndex = 0
+    confirm.opened = true
+    root.confirmOpen = true
+    Qt.callLater(function() { confirmKeys.forceActiveFocus() })
+  }
+
+  function finishConfirm(accepted) {
+    var row = confirm.pendingRow
+    var verb = confirm.pendingVerb
+    confirm.opened = false
+    confirm.pendingRow = null
+    confirm.pendingVerb = ""
+    root.confirmOpen = false
+    if (accepted && row) docker.containerAction(row.host, row.container, verb)
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  function openMenu(row) {
+    if (!row || row.kind !== "container") return
+    var item = rowItems[row.key]
+    if (item && item.openMenu) item.openMenu()
   }
 
   // Row-level verbs shared by keys and buttons; groups fan out to members.
   function rowAction(row, verb) {
-    if (!row) return
+    if (!row || row.kind === "host") return
     if (row.kind === "group") docker.groupAction(row.host, row.group, verb)
     else if (verb === "restart") docker.restartContainer(row.host, row.container)
     else docker.containerAction(row.host, row.container, verb)
   }
 
   function rowLogs(row) {
-    if (!row) return
+    if (!row || row.kind === "host") return
     if (row.kind === "group") docker.openGroupLogs(row.host, row.group)
     else docker.openLogs(row.host, row.container)
   }
@@ -169,10 +260,14 @@ Panel {
   }
 
   readonly property string footerText: {
+    if (confirmOpen) return "←/→ choose · ⏎ confirm · Esc cancel"
+    if (menuOpen) return "↑/↓ move · ⏎ choose · Esc close"
     if (searchField && searchField.activeFocus) return "type to filter · ↑/↓ move · ⏎ back to list · Esc clear"
     var row = selected
-    if (row && row.kind === "group") return "j/k move · ⏎ fold/unfold · u up · d down · r restart · l logs · z fold all · / search · R refresh"
-    return "j/k move · ⏎ start/stop · l logs · r restart · s shell · c copy name · / search · R refresh · L lazydocker"
+    var sort = " · t sort: " + sortBy
+    if (row && row.kind === "host") return "j/k move · ⏎ fold host · h hide/show stopped · L lazydocker · / search" + sort
+    if (row && row.kind === "group") return "j/k move · ⏎ fold · u up · d down · r restart · l logs · z fold all · / search" + sort
+    return "j/k move · ⏎ start/stop · l logs · s shell · r restart · o open port · m menu · x kill/remove · / search" + sort
   }
 
   function scrollItemIntoView(item) {
@@ -233,18 +328,29 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { docker.refresh(); return "ok" }
     function status(): string { return docker.summaryText }
-    function version(): string { return "0.4.0" }
+    function version(): string { return "0.5.0" }
     function running(): string { return String(docker.counts.running) }
     function settings(): string { return JSON.stringify({ settings: root.settings, contexts: docker.contexts }) }
     function rows(): string {
       var out = []
       for (var i = 0; i < root.rows.length; i++) {
         var r = root.rows[i]
-        out.push((i === root.cursorIndex && root.cursorActive ? "> " : "  ") + (r.kind === "group" ? "[" + r.group.project + " " + Model.groupSummary(r.group) + "]" : "  " + r.container.name + " (" + r.container.state + ")") + " @" + r.host.name)
+        var mark = (i === root.cursorIndex && root.cursorActive ? "> " : "  ")
+        var label = r.kind === "host" ? "# " + r.host.name + (r.view.collapsed ? " (folded)" : "") + (r.view.hiddenStopped ? " (" + r.view.hiddenStopped + " hidden)" : "")
+          : r.kind === "group" ? "  [" + r.group.project + " " + Model.groupSummary(r.group) + "]"
+          : "    " + r.container.name + " (" + r.container.state + ")"
+        out.push(mark + label + " @" + r.host.name)
       }
       return out.join("\n")
     }
     function search(text: string): string { root.open(); root.query = text; root.openSearch(); return "ok" }
+    // omarchy-shell x99.dockarchy sort <State|Name|CPU|Memory|next>
+    function sort(mode: string): string {
+      var next = mode === "next" ? Model.nextSortMode(root.sortBy) : mode
+      if (Model.SORT_MODES.indexOf(next) === -1) return "unknown sort mode: " + mode
+      root.persist({ sortBy: next })
+      return next
+    }
     // omarchy-shell x99.dockarchy action <context> <container name or id> <start|stop|restart|pause|unpause>
     function action(context: string, container: string, verb: string): string {
       var found = docker.findContainer(context, container)
@@ -299,6 +405,8 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.menuOpen || root.confirmOpen
+      onDeleteRequested: root.requestDestroy(root.selected)
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) root.moveCursor(dy > 0 ? 1 : -1)
@@ -316,10 +424,35 @@ Panel {
         else if (t === "r") root.rowAction(row, "restart")
         else if (t === "u") root.rowAction(row, "start")
         else if (t === "d") root.rowAction(row, "stop")
-        else if (t === "z") root.setAllCollapsed(Object.keys(root.collapsed).length === 0)
+        else if (t === "z") root.setAllCollapsed(root.collapsedGroups.length === 0)
+        else if (t === "t") root.cycleSort()
+        else if (t === "h" && row) root.toggleHideStopped(row.host)
+        else if (t === "o") root.openFirstPort(row)
+        else if (t === "m") root.openMenu(row)
+        else if (t === "i" && row && row.kind === "container") docker.openInspect(row.host, row.container)
         else if (t === "s" && row && row.kind === "container") docker.openShell(row.host, row.container)
         else if (t === "c" && row && row.kind === "container") docker.copyToClipboard(row.container.name)
         else if (t === "L") docker.openLazydocker(row ? row.host : null)
+      }
+
+      // Destructive actions ask first. The dialog fills the panel; keys reach
+      // it through this focus item while the catcher is blocked.
+      ConfirmDialog {
+        id: confirm
+        anchors.fill: parent
+        z: 50
+        property string pendingVerb: ""
+        property var pendingRow: null
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onCanceled: root.finishConfirm(false)
+        onConfirmed: root.finishConfirm(true)
+
+        Item {
+          id: confirmKeys
+          focus: confirm.opened
+          Keys.onPressed: function(event) { if (confirm.handleKey(event)) event.accepted = true }
+        }
       }
 
       ColumnLayout {
@@ -531,63 +664,10 @@ Panel {
       foreground: root.foreground
     }
 
-    RowLayout {
+    HostRow {
       width: parent.width
-      spacing: Style.space(8)
-
-      Text {
-        text: Model.hostGlyph(section.host)
-        color: section.host && section.host.ok ? root.foreground : root.warning
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.icon
-        Layout.alignment: Qt.AlignVCenter
-      }
-
-      ColumnLayout {
-        Layout.fillWidth: true
-        spacing: 0
-
-        PanelSectionHeader {
-          Layout.fillWidth: true
-          text: section.hostName.toUpperCase()
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-        }
-
-        Text {
-          textFormat: Text.PlainText
-          Layout.fillWidth: true
-          visible: section.host && section.host.endpoint !== ""
-          text: section.host ? section.host.endpoint : ""
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideMiddle
-        }
-      }
-
-      Text {
-        textFormat: Text.PlainText
-        visible: section.host && section.host.ok
-        text: {
-          if (!section.host) return ""
-          var base = section.host.counts.running + "/" + section.host.counts.total
-          return root.filtering && section.view ? section.view.matches + " match · " + base : base
-        }
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        Layout.alignment: Qt.AlignVCenter
-      }
-
-      PanelActionButton {
-        iconText: "󰆍"
-        tooltipText: "lazydocker on " + section.hostName
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        visible: section.host && section.host.ok
-        onClicked: docker.openLazydocker(section.host)
-      }
+      host: section.host
+      view: section.view
     }
 
     CursorSurface {
@@ -628,7 +708,7 @@ Panel {
     }
 
     Text {
-      visible: section.host && section.host.ok && section.host.containers.length === 0
+      visible: section.host && section.host.ok && section.host.containers.length === 0 && !(section.view && section.view.collapsed)
       width: parent.width
       text: docker.showAll ? "No containers on this host." : "No running containers on this host."
       color: root.dim
@@ -638,6 +718,7 @@ Panel {
     }
 
     Column {
+      visible: !(section.view && section.view.collapsed)
       width: parent.width
       spacing: Style.space(6)
 
@@ -670,6 +751,119 @@ Panel {
             }
           }
         }
+      }
+    }
+  }
+
+  // Host header: a cursor row that folds the whole host and toggles whether
+  // its stopped containers are listed.
+  component HostRow: CursorSurface {
+    id: hostRow
+    property var host: null
+    property var view: null
+    readonly property string hostName: host ? String(host.name) : ""
+    readonly property string key: hostName !== "" ? "host:" + hostName : ""
+    readonly property int flatIndex: key !== "" ? root.rowIndexOf(key) : -1
+    readonly property bool folded: view && view.collapsed
+    readonly property bool hidingStopped: view && view.hideStopped
+
+    hasCursor: root.cursorActive && root.cursorIndex === flatIndex && flatIndex >= 0
+    foreground: root.foreground
+    fill: root.hoverFill
+    implicitHeight: hostContent.implicitHeight + Style.spacing.rowPaddingX
+
+    Component.onCompleted: if (key !== "") root.registerRow(key, hostRow)
+    Component.onDestruction: if (key !== "") root.unregisterRow(key)
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onContainsMouseChanged: if (containsMouse && hostRow.flatIndex >= 0) root.setCursor(hostRow.flatIndex)
+      onClicked: root.toggleHostCollapsed(hostRow.host)
+    }
+
+    RowLayout {
+      id: hostContent
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(6)
+      anchors.rightMargin: Style.space(6)
+      spacing: Style.space(8)
+
+      Text {
+        textFormat: Text.PlainText
+        text: hostRow.folded ? "󰅂" : "󰅀"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+      }
+
+      Text {
+        text: Model.hostGlyph(hostRow.host)
+        color: hostRow.host && hostRow.host.ok ? root.foreground : root.warning
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+      }
+
+      ColumnLayout {
+        Layout.fillWidth: true
+        spacing: 0
+
+        PanelSectionHeader {
+          Layout.fillWidth: true
+          text: hostRow.hostName.toUpperCase()
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          visible: hostRow.host && hostRow.host.endpoint !== ""
+          text: hostRow.host ? hostRow.host.endpoint : ""
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideMiddle
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        visible: hostRow.host && hostRow.host.ok
+        text: {
+          if (!hostRow.host) return ""
+          var base = hostRow.host.counts.running + "/" + hostRow.host.counts.total
+          if (root.filtering && hostRow.view) return hostRow.view.matches + " match · " + base
+          if (hostRow.view && hostRow.view.hiddenStopped > 0) return base + " · " + hostRow.view.hiddenStopped + " hidden"
+          return base
+        }
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        Layout.alignment: Qt.AlignVCenter
+      }
+
+      PanelActionButton {
+        iconText: hostRow.hidingStopped ? "󰈉" : "󰈈"
+        tooltipText: hostRow.hidingStopped ? "Show stopped containers (h)" : "Hide stopped containers (h)"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        visible: hostRow.host && hostRow.host.ok && !root.filtering
+        onClicked: root.toggleHideStopped(hostRow.host)
+      }
+
+      PanelActionButton {
+        iconText: "󰆍"
+        tooltipText: "lazydocker on " + hostRow.hostName
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        visible: hostRow.host && hostRow.host.ok
+        onClicked: docker.openLazydocker(hostRow.host)
       }
     }
   }
@@ -803,19 +997,55 @@ Panel {
       if (container.running) return root.foreground
       return root.dim
     }
-    readonly property string detailText: {
-      if (!container) return ""
-      var parts = []
-      if (container.image !== "") parts.push(container.image)
-      if (container.ports !== "") parts.push(container.ports)
-      return parts.join(" · ")
-    }
     readonly property string statusText: {
       if (!container) return ""
       var s = container.status
       if (container.project !== "" && !(group && group.header)) s = container.project + " · " + s
       if (container.service !== "" && group && group.header && container.service !== container.name) s = container.service + " · " + s
       return s
+    }
+    property int menuIndex: 0
+    readonly property var menuItems: buildMenuItems()
+
+    // Everything the row can do, in one list, so mouse menu and keys agree.
+    function buildMenuItems() {
+      if (!container) return []
+      var items = []
+      var ports = container.published || []
+      for (var p = 0; p < ports.length && p < 4; p++) {
+        items.push({ icon: "󰖟", label: "Open " + Model.portUrl(host ? host.endpoint : "", ports[p]), kind: "port", port: ports[p] })
+      }
+      items.push({ icon: "󰈙", label: "Logs", kind: "logs" })
+      if (container.running) items.push({ icon: "󰆍", label: "Shell", kind: "shell" })
+      items.push({ icon: "󰋽", label: "Inspect", kind: "inspect" })
+      if (container.running) items.push({ icon: "󰑐", label: "Restart", kind: "restart" })
+      items.push({ icon: container.running ? "󰓛" : "󰐊", label: container.running ? "Stop" : "Start", kind: "toggle" })
+      items.push({ icon: "󰆏", label: "Copy name", kind: "copy-name" })
+      items.push({ icon: "󰆏", label: "Copy ID  " + container.shortId, kind: "copy-id" })
+      items.push({ icon: "󰅖", label: container.running ? "Kill…" : "Remove…", kind: "destroy", destructive: true })
+      return items
+    }
+
+    function openMenu() {
+      if (menuItems.length === 0) return
+      menuIndex = 0
+      if (flatIndex >= 0) root.setCursor(flatIndex)
+      menuPopup.open()
+    }
+
+    function runMenuItem(item) {
+      menuPopup.close()
+      if (!item) return
+      var r = { kind: "container", host: host, group: group, container: container, key: key }
+      if (item.kind === "port") docker.openPort(host, item.port)
+      else if (item.kind === "logs") docker.openLogs(host, container)
+      else if (item.kind === "shell") docker.openShell(host, container)
+      else if (item.kind === "inspect") docker.openInspect(host, container)
+      else if (item.kind === "restart") docker.restartContainer(host, container)
+      else if (item.kind === "toggle") docker.toggleContainer(host, container)
+      else if (item.kind === "copy-name") docker.copyToClipboard(container.name)
+      else if (item.kind === "copy-id") docker.copyToClipboard(container.id)
+      else if (item.kind === "destroy") root.requestDestroy(r)
     }
 
     hasCursor: root.cursorActive && root.cursorIndex === flatIndex && flatIndex >= 0
@@ -830,12 +1060,62 @@ Panel {
 
     MouseArea {
       anchors.fill: parent
-      acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+      acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
       hoverEnabled: true
       cursorShape: Qt.ArrowCursor
       onContainsMouseChanged: if (containsMouse && row.flatIndex >= 0) root.setCursor(row.flatIndex)
       onClicked: function(mouse) {
         if (mouse.button === Qt.MiddleButton) docker.copyToClipboard(row.container.name)
+        else if (mouse.button === Qt.RightButton) row.openMenu()
+      }
+    }
+
+    Popup {
+      id: menuPopup
+      x: Math.max(0, Math.min(row.width - width - Style.space(6), row.width * 0.55))
+      y: row.height - Style.space(4)
+      width: Style.space(300)
+      padding: 0
+      modal: false
+      focus: true
+      closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+      onOpenedChanged: {
+        root.menuOpen = opened
+        if (opened) Qt.callLater(function() { menuContent.forceActiveFocus() })
+        else if (root.opened && !root.confirmOpen) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+      }
+      background: BorderSurface {
+        color: Color.background
+        borderSpec: Border.flat(root.dim, 1)
+        radius: Style.cornerRadius
+      }
+
+      contentItem: Column {
+        id: menuContent
+        width: parent.width
+        focus: true
+        Keys.priority: Keys.BeforeItem
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape) { menuPopup.close(); event.accepted = true }
+          else if (event.key === Qt.Key_Down || event.text === "j") { row.menuIndex = Math.min(row.menuItems.length - 1, row.menuIndex + 1); event.accepted = true }
+          else if (event.key === Qt.Key_Up || event.text === "k") { row.menuIndex = Math.max(0, row.menuIndex - 1); event.accepted = true }
+          else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) { row.runMenuItem(row.menuItems[row.menuIndex]); event.accepted = true }
+        }
+
+        Repeater {
+          model: row.menuItems
+          MenuChoice {
+            required property var modelData
+            required property int index
+            width: parent.width
+            icon: String(modelData.icon || "")
+            label: String(modelData.label || "")
+            destructive: modelData.destructive === true
+            selected: row.menuIndex === index
+            onHovered: row.menuIndex = index
+            onChosen: row.runMenuItem(modelData)
+          }
+        }
       }
     }
 
@@ -880,15 +1160,40 @@ Panel {
           elide: Text.ElideRight
         }
 
-        Text {
-          textFormat: Text.PlainText
+        RowLayout {
           Layout.fillWidth: true
-          visible: text !== ""
-          text: row.detailText
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
+          visible: row.container && (row.container.image !== "" || row.container.published.length > 0)
+          spacing: Style.space(6)
+
+          Text {
+            textFormat: Text.PlainText
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
+            text: row.container ? row.container.image : ""
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+
+          Repeater {
+            model: row.container ? row.container.published.slice(0, 4) : []
+            PortChip {
+              required property var modelData
+              port: modelData
+              host: row.host
+            }
+          }
+
+          Text {
+            visible: row.container && row.container.published.length > 4
+            text: "+" + (row.container ? row.container.published.length - 4 : 0)
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Item { Layout.fillWidth: true }
         }
 
         Text {
@@ -992,6 +1297,83 @@ Panel {
         fontFamily: root.fontFamily
         Layout.alignment: Qt.AlignVCenter
         onClicked: docker.toggleContainer(row.host, row.container)
+      }
+    }
+  }
+
+  // "8080->80" that opens http://host:8080 in the browser.
+  component PortChip: Text {
+    id: chip
+    property var port: null
+    property var host: null
+    readonly property string url: Model.portUrl(host ? host.endpoint : "", port)
+    textFormat: Text.PlainText
+    text: port ? port.host + "→" + port.container : ""
+    color: chipMouse.containsMouse ? root.foreground : root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.underline: chipMouse.containsMouse
+
+    MouseArea {
+      id: chipMouse
+      anchors.fill: parent
+      anchors.margins: -Style.space(2)
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: docker.openUrl(chip.url)
+    }
+
+    PanelToolTip {
+      visible: chipMouse.containsMouse
+      text: chip.url
+      fontFamily: root.fontFamily
+    }
+  }
+
+  component MenuChoice: CursorSurface {
+    id: choice
+    signal chosen()
+    signal hovered()
+    property string icon: ""
+    property string label: ""
+    property bool selected: false
+    property bool destructive: false
+
+    foreground: root.foreground
+    hasCursor: selected
+    implicitHeight: Style.space(34)
+    radius: 0
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: choice.hovered()
+      onClicked: choice.chosen()
+    }
+
+    RowLayout {
+      anchors.fill: parent
+      anchors.leftMargin: Style.space(12)
+      anchors.rightMargin: Style.space(12)
+      spacing: Style.space(10)
+
+      Text {
+        text: choice.icon
+        color: choice.destructive ? root.warning : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        Layout.fillWidth: true
+        text: choice.label
+        color: choice.destructive ? root.warning : root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+        elide: Text.ElideMiddle
       }
     }
   }

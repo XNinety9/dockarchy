@@ -65,6 +65,7 @@ function normalizeContainer(c) {
     health: healthFromStatus(status),
     running: state === "running",
     ports: summarizePorts((c && c.Ports) || ""),
+    published: publishedPorts((c && c.Ports) || ""),
     project: String(labels["com.docker.compose.project"] || ""),
     service: String(labels["com.docker.compose.service"] || ""),
     workingDir: String(labels["com.docker.compose.project.working_dir"] || ""),
@@ -170,6 +171,36 @@ function summarizePorts(text) {
   return out.join(", ")
 }
 
+// Host-side published ports, deduplicated: [{host: "8080", container: "80", proto: "tcp"}].
+// Unpublished exposures ("5432/tcp") are left out — nothing to open there.
+function publishedPorts(text) {
+  var seen = {}
+  var out = []
+  var parts = String(text || "").split(",")
+  for (var i = 0; i < parts.length; i++) {
+    var m = /:(\d+)->(\d+)\/(\w+)/.exec(parts[i].trim())
+    if (!m || seen[m[1]]) continue
+    seen[m[1]] = true
+    out.push({ host: m[1], container: m[2], proto: m[3].toLowerCase() })
+  }
+  out.sort(function(a, b) { return parseInt(a.host, 10) - parseInt(b.host, 10) })
+  return out
+}
+
+// Where a published port is reachable from this machine: the ssh hostname for
+// remote contexts, the tcp host for tcp:// ones, localhost otherwise.
+function hostAddress(endpoint) {
+  var e = String(endpoint || "")
+  var m = /^(?:ssh|tcp|https?):\/\/(?:[^@\/]+@)?([^:\/]+)/i.exec(e)
+  return m ? m[1] : "localhost"
+}
+
+function portUrl(endpoint, port) {
+  if (!port) return ""
+  var scheme = String(port.container) === "443" || String(port.host) === "443" ? "https" : "http"
+  return scheme + "://" + hostAddress(endpoint) + ":" + port.host
+}
+
 function isRemoteEndpoint(endpoint) {
   var e = String(endpoint || "")
   return /^(ssh|tcp|https?):\/\//i.test(e)
@@ -180,6 +211,38 @@ function compareContainers(a, b) {
   var sb = STATE_ORDER[b.state] === undefined ? 9 : STATE_ORDER[b.state]
   if (sa !== sb) return sa - sb
   return a.name.localeCompare(b.name)
+}
+
+var SORT_MODES = ["State", "Name", "CPU", "Memory"]
+
+function nextSortMode(mode) {
+  var i = SORT_MODES.indexOf(String(mode || "State"))
+  return SORT_MODES[(i + 1) % SORT_MODES.length]
+}
+
+// "20.7MiB" -> bytes, for sorting. Unknown -> -1 so stat-less rows sink.
+function memBytes(text) {
+  var m = /^([\d.]+)\s*([KMGT]?)i?B$/i.exec(String(text || "").trim())
+  if (!m) return -1
+  var mult = { "": 1, K: 1024, M: 1048576, G: 1073741824, T: 1099511627776 }[m[2].toUpperCase()]
+  return parseFloat(m[1]) * mult
+}
+
+// Stable sort by the chosen mode; CPU and Memory put the hungriest first and
+// fall back to the state order for containers without stats.
+function sortContainers(containers, mode) {
+  var list = (containers || []).slice()
+  var by = String(mode || "State")
+  list.sort(function(a, b) {
+    if (by === "Name") return a.name.localeCompare(b.name)
+    if (by === "CPU" || by === "Memory") {
+      var va = a.stats ? (by === "CPU" ? a.stats.cpu : memBytes(a.stats.memUsed)) : -1
+      var vb = b.stats ? (by === "CPU" ? b.stats.cpu : memBytes(b.stats.memUsed)) : -1
+      if (va !== vb) return vb - va
+    }
+    return compareContainers(a, b)
+  })
+  return list
 }
 
 function emptyCounts() {
@@ -430,6 +493,8 @@ if (typeof module !== "undefined") {
     healthFromStatus: healthFromStatus, summarizePorts: summarizePorts, summaryText: summaryText,
     stateGlyph: stateGlyph, hostGlyph: hostGlyph, errorHint: errorHint, shortError: shortError,
     formatBar: formatBar, normalizeStats: normalizeStats, formatPercent: formatPercent, shortBytes: shortBytes, statsTooltip: statsTooltip,
+    publishedPorts: publishedPorts, hostAddress: hostAddress, portUrl: portUrl,
+    sortContainers: sortContainers, nextSortMode: nextSortMode, memBytes: memBytes, SORT_MODES: SORT_MODES,
     matchesQuery: matchesQuery, filterContainers: filterContainers, groupContainers: groupContainers, groupKey: groupKey, groupSummary: groupSummary,
     sshArgv: sshArgv, shellQuote: shellQuote, snapshot: snapshot, diffSnapshots: diffSnapshots
   }

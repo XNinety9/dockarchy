@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "x99.dockarchy",
   "name": "Dockarchy",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "XNinety9",
   "license": "WTFPL",
   "description": "Docker container status for local and remote (ssh) hosts in the Omarchy bar, with CPU/memory per container, start/stop/restart, logs and shell access.",
@@ -29,7 +29,8 @@
       "panelMaxHeight": 800,
       "alternateRows": false,
       "groupByProject": true,
-      "notifications": "Problems"
+      "notifications": "Problems",
+      "sortBy": "State"
     },
     "schema": [
       {
@@ -81,6 +82,19 @@
         "label": "Group by Compose project",
         "defaultValue": true,
         "description": "Fold containers under their docker compose project, with start/stop/restart/logs for the whole project."
+      },
+      {
+        "key": "sortBy",
+        "type": "enum",
+        "label": "Sort containers by",
+        "options": [
+          "State",
+          "Name",
+          "CPU",
+          "Memory"
+        ],
+        "defaultValue": "State",
+        "description": "State = running first, then by name. CPU and Memory put the hungriest first. Press t in the panel to cycle."
       },
       {
         "key": "notifications",

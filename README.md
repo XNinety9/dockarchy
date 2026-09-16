@@ -102,25 +102,40 @@ logs, shell — still go through `docker --context`, which is a single request.
 | Target        | Mouse                                                                  |
 |---------------|------------------------------------------------------------------------|
 | Header        | Search · refresh · lazydocker buttons                                  |
-| Host header   | lazydocker button for that host                                        |
+| Host row      | Click to fold/unfold the host · eye button hides/shows its stopped containers · lazydocker |
 | Project row   | Click to fold/unfold · buttons: project logs · restart · start/stop all |
-| Container row | Buttons, left to right: logs · shell · restart · start/stop · middle-click copies the name |
+| Container row | Buttons: logs · shell · restart · start/stop · middle-click copies the name · **right-click opens the menu** |
+| Port chip     | `8080→80` under the name: click opens `http://<host>:8080` in your browser |
 | Stats column  | Hover for memory limit, network I/O, disk I/O and PIDs                 |
 
-| Key       | On a container                        | On a project row                 |
-|-----------|---------------------------------------|----------------------------------|
-| `j` / `k` | Move (across projects and hosts)      | Move                             |
-| `⏎`       | Start / stop                          | Fold / unfold                    |
-| `u` / `d` | Start / stop                          | Start / stop every container     |
-| `r`       | Restart                               | Restart the running ones         |
-| `l` / `→` | Tail logs in a terminal               | `docker compose logs -f`         |
-| `s`       | Shell (`bash`, falling back to `sh`)  | —                                |
-| `c`       | Copy the container name               | —                                |
-| `z`       | Fold / unfold every project           | Fold / unfold every project      |
-| `/`       | Search                                | Search                           |
-| `R`       | Refresh                               | Refresh                          |
-| `L`       | lazydocker for the selected host      | lazydocker for the selected host |
-| `Esc`     | Close                                 | Close                            |
+The **context menu** (right-click or `m`) gathers everything for one container:
+open each published port, logs, shell, inspect (`docker inspect | less`),
+restart, start/stop, copy name or ID, and *Kill…* / *Remove…* behind a
+confirmation.
+
+| Key       | On a container                        | On a project row                 | On a host row            |
+|-----------|---------------------------------------|----------------------------------|--------------------------|
+| `j` / `k` | Move (across projects and hosts)      | Move                             | Move                     |
+| `⏎`       | Start / stop                          | Fold / unfold                    | Fold / unfold the host   |
+| `u` / `d` | Start / stop                          | Start / stop every container     | —                        |
+| `r`       | Restart                               | Restart the running ones         | —                        |
+| `l` / `→` | Tail logs in a terminal               | `docker compose logs -f`         | —                        |
+| `s`       | Shell (`bash`, falling back to `sh`)  | —                                | —                        |
+| `i`       | Inspect                               | —                                | —                        |
+| `o`       | Open the first published port         | —                                | —                        |
+| `m`       | Context menu                          | —                                | —                        |
+| `x`       | Kill (running) / remove (stopped), after confirming | —                  | —                        |
+| `c`       | Copy the container name               | —                                | —                        |
+| `h`       | Hide / show stopped containers of this host | same                       | same                     |
+| `z`       | Fold / unfold every project           | same                             | same                     |
+| `t`       | Cycle sort: State → Name → CPU → Memory | same                           | same                     |
+| `/`       | Search                                | Search                           | Search                   |
+| `R`       | Refresh                               | Refresh                          | Refresh                  |
+| `L`       | lazydocker for the selected host      | same                             | same                     |
+| `Esc`     | Close                                 | Close                            | Close                    |
+
+Folded hosts and projects, hidden-stopped hosts and the sort order are
+remembered in the widget's settings entry.
 
 **Search** (`/`): every word you type must match somewhere in the name, image,
 project, service, state or status line — `unhealthy` lists the sick ones on
@@ -167,6 +182,8 @@ them there, in the shell's settings UI, or with
 | `showAll`            | `true`      | Include stopped containers (`docker ps -a`).                       |
 | `showStats`          | `true`      | CPU % and memory per running container (`docker stats`, about a second extra per poll). |
 | `groupByProject`     | `true`      | Fold containers under their Compose project with project-level actions. |
+| `sortBy`             | `State`     | `State` (running first, then name), `Name`, `CPU` or `Memory` (hungriest first). `t` cycles it. |
+| `collapsedHosts`, `collapsedGroups`, `hideStoppedHosts` | *(empty)* | Comma-separated lists written by the panel itself as you fold or hide things. |
 | `notifications`      | `Problems`  | `Off`, `Problems`, or `Problems and recoveries` — see Notifications above. |
 | `barFormat`          | `{running}` | Label next to the whale (see below). Empty = icon only.            |
 | `panelWidth`         | `700`       | Popup width in px (300–1400).                                      |
@@ -202,9 +219,10 @@ omarchy bar set x99.dockarchy barFormat ''            # icon only
 omarchy-shell x99.dockarchy toggle | open | close | refresh
 omarchy-shell x99.dockarchy status      # "27 running · 1 stopped · 1 unhealthy · 2 hosts"
 omarchy-shell x99.dockarchy running     # "27"
-omarchy-shell x99.dockarchy action <context> <name|id> <start|stop|restart|pause|unpause>
+omarchy-shell x99.dockarchy action <context> <name|id> <start|stop|restart|pause|unpause|kill|rm>
 omarchy-shell x99.dockarchy project <context> <project> <start|stop|restart>
 omarchy-shell x99.dockarchy search <text>   # open the panel with a filter
+omarchy-shell x99.dockarchy sort <State|Name|CPU|Memory|next>
 omarchy-shell x99.dockarchy version
 omarchy-shell x99.dockarchy settings    # resolved settings, for debugging
 omarchy-shell x99.dockarchy rows        # what the panel currently lists, for debugging
@@ -264,6 +282,10 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
+- **0.5.0** — clickable port chips and `o`; right-click / `m` context menu with
+  inspect, copy ID, kill and remove behind a confirmation (`x`); host rows fold
+  and can hide their stopped containers (`h`), remembered across restarts;
+  sort by state, name, CPU or memory (`t`).
 - **0.4.0** — search across hosts (`/`); containers grouped by Compose project
   with fold and project-wide start/stop/restart/logs; desktop notifications on
   unhealthy, unexpected stop or unreachable host, with recoveries optional;

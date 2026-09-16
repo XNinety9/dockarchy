@@ -140,6 +140,34 @@ test("diffSnapshots honours the verb the user ran", () => {
   assert.equal(Model.diffSnapshots(null, snapOf(after), {}).length, 0);
 });
 
+test("published ports and URLs", () => {
+  const ports = Model.publishedPorts("0.0.0.0:8443->443/tcp, [::]:8443->443/tcp, 0.0.0.0:8080->80/tcp, 5432/tcp, 0.0.0.0:53->53/udp");
+  assert.deepEqual(ports.map((p) => `${p.host}->${p.container}/${p.proto}`), ["53->53/udp", "8080->80/tcp", "8443->443/tcp"]);
+  assert.equal(Model.hostAddress("unix:///var/run/docker.sock"), "localhost");
+  assert.equal(Model.hostAddress("ssh://x99@x99.fr"), "x99.fr");
+  assert.equal(Model.hostAddress("tcp://10.0.0.5:2376"), "10.0.0.5");
+  assert.equal(Model.portUrl("ssh://me@srv", ports[1]), "http://srv:8080");
+  assert.equal(Model.portUrl("unix:///x", ports[2]), "https://localhost:8443");
+  assert.equal(Model.portUrl("unix:///x", null), "");
+  assert.equal(Model.normalizeContainer(psRow()).published[0].host, "8080");
+});
+
+test("sorting modes", () => {
+  const withStats = (name, cpu, mem, running = true) => Model.normalizeContainer(psRow({
+    Names: name, State: running ? "running" : "exited", ID: name.padEnd(64, "0"),
+    Stats: running ? { CPUPerc: cpu + "%", MemUsage: mem + " / 1GiB", MemPerc: "0%", NetIO: "", BlockIO: "", PIDs: "1" } : null,
+  }));
+  const list = [withStats("b", 5, "10MiB"), withStats("a", 1, "2GiB"), withStats("c", 0, "0B", false), withStats("d", 50, "512KiB")];
+  assert.deepEqual(Model.sortContainers(list, "State").map((c) => c.name), ["a", "b", "d", "c"]);
+  assert.deepEqual(Model.sortContainers(list, "Name").map((c) => c.name), ["a", "b", "c", "d"]);
+  assert.deepEqual(Model.sortContainers(list, "CPU").map((c) => c.name), ["d", "b", "a", "c"]);
+  assert.deepEqual(Model.sortContainers(list, "Memory").map((c) => c.name), ["a", "b", "d", "c"]);
+  assert.equal(Model.memBytes("1GiB"), 1073741824);
+  assert.equal(Model.memBytes("nope"), -1);
+  assert.equal(Model.nextSortMode("State"), "Name");
+  assert.equal(Model.nextSortMode("Memory"), "State");
+});
+
 test("glyphs", () => {
   assert.equal(Model.stateGlyph({ running: true, state: "running", health: "" }), "󰐊");
   assert.equal(Model.stateGlyph({ running: true, state: "running", health: "unhealthy" }), "󰀦");

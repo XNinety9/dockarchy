@@ -216,13 +216,14 @@ Item {
 
   function containerAction(host, container, verb) {
     if (!host || !container || actionProcess.running) return
-    var allowed = ["start", "stop", "restart", "pause", "unpause"]
+    var allowed = ["start", "stop", "restart", "pause", "unpause", "kill", "rm"]
     if (allowed.indexOf(verb) === -1) return
+    if (verb === "rm" && container.running) return
     _actionOutput = ""
     _actionError = ""
     pendingActionKey = actionKey(host, container)
     markUserTouched(host, [container], verb)
-    actionStatus = capitalize(verb) + "ing " + container.name + "…"
+    actionStatus = (verb === "rm" ? "Removing " : verb === "stop" ? "Stopping " : capitalize(verb) + "ing ") + container.name + "…"
     actionProcess.command = ["timeout", String(Math.max(timeoutSec, 30)), "docker", "--context", String(host.name), verb, String(container.id)]
     actionProcess.running = true
   }
@@ -264,6 +265,27 @@ Item {
     var local = ["docker"]
     if (host && host.name) local.push("--context", String(host.name))
     return local.concat(argv)
+  }
+
+  // `docker inspect` is long: page it. The pipe means a shell on either side.
+  function openInspect(host, container) {
+    if (!host || !container) return
+    var ssh = Model.sshArgv(host.endpoint)
+    var cmd
+    if (ssh) cmd = ssh.slice(0, 1).concat(["-t"]).concat(ssh.slice(1)).concat(["docker inspect " + Model.shellQuote(String(container.id)) + " | less -R"])
+    else cmd = ["sh", "-c", "docker --context " + Model.shellQuote(String(host.name)) + " inspect " + Model.shellQuote(String(container.id)) + " | less -R"]
+    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.dockarchy-inspect"].concat(cmd))
+  }
+
+  function openUrl(url) {
+    var u = String(url || "")
+    if (u === "") return
+    Quickshell.execDetached(["omarchy-launch-browser", u])
+  }
+
+  function openPort(host, port) {
+    if (!host || !port) return
+    openUrl(Model.portUrl(host.endpoint, port))
   }
 
   function openGroupLogs(host, group) {
