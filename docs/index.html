@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dockarchy — containers in your Omarchy bar</title>
+<meta name="description" content="Dockarchy is an Omarchy bar plugin that shows Docker and Podman containers from your laptop and your remote servers in one panel: Compose projects, stats, logs, shell, image updates and notifications.">
+<meta property="og:title" content="Dockarchy — containers in your Omarchy bar">
+<meta property="og:description" content="Every container, every host, in one Omarchy panel. Local Docker, remote servers over SSH, Podman too.">
+<meta property="og:image" content="https://xninety9.github.io/dockarchy/preview.png">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d63ed'/%3E%3Cpath fill='%23fff' d='M5 18c0-.6.5-1 1-1h17c2 0 3-1.5 4.5-1.8 1-.2 2 .3 2.5 1-.5 2.5-2 4.5-4 6l-1 .5C21.5 25 17 26 12.5 25 8.5 24 5.5 22 4 19.5c-.5-.7 1-1.5 1-1.5z'/%3E%3Cg fill='%23fff'%3E%3Crect x='9' y='13' width='4' height='3.5' rx='.6'/%3E%3Crect x='13.5' y='13' width='4' height='3.5' rx='.6'/%3E%3Crect x='18' y='13' width='4' height='3.5' rx='.6'/%3E%3Crect x='13.5' y='9' width='4' height='3.5' rx='.6'/%3E%3Crect x='18' y='9' width='4' height='3.5' rx='.6'/%3E%3Crect x='18' y='5' width='4' height='3.5' rx='.6'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f1216;
+    --bg-elev: #151a20;
+    --bg-card: #1a2029;
+    --line: #262e39;
+    --fg: #e6e1d3;
+    --fg-dim: #8f9aa8;
+    --accent: #f2c98a;
+    --accent-2: #7cc4ff;
+    --warn: #f0a15c;
+    --ok: #74c69d;
+    --shadow: 0 30px 80px rgba(0,0,0,.45);
+    --radius: 14px;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f3ec; --bg-elev: #fbf9f4; --bg-card: #ffffff; --line: #e3ddd0;
+      --fg: #1b1f26; --fg-dim: #5c6675; --accent: #b0721a; --accent-2: #1b6fd1;
+      --warn: #c9701f; --ok: #2f8f5f; --shadow: 0 30px 80px rgba(60,40,10,.14);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f3ec; --bg-elev: #fbf9f4; --bg-card: #ffffff; --line: #e3ddd0;
+    --fg: #1b1f26; --fg-dim: #5c6675; --accent: #b0721a; --accent-2: #1b6fd1;
+    --warn: #c9701f; --ok: #2f8f5f; --shadow: 0 30px 80px rgba(60,40,10,.14);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans);
+    line-height: 1.6; -webkit-font-smoothing: antialiased;
+    background-image: radial-gradient(1200px 600px at 70% -10%, rgba(124,196,255,.10), transparent 60%),
+                      radial-gradient(900px 500px at 0% 20%, rgba(242,201,138,.08), transparent 60%);
+  }
+  a { color: var(--accent-2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, kbd, pre { font-family: var(--mono); }
+  code { background: var(--bg-card); border: 1px solid var(--line); border-radius: 6px; padding: .1em .4em; font-size: .92em; }
+  kbd { display: inline-block; min-width: 1.6em; text-align: center; padding: .05em .45em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; background: var(--bg-card); font-size: .85em; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+  /* nav */
+  nav { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(10px); background: color-mix(in srgb, var(--bg) 80%, transparent); border-bottom: 1px solid var(--line); }
+  nav .wrap { display: flex; align-items: center; gap: 18px; height: 58px; }
+  nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--fg); letter-spacing: .2px; }
+  nav .brand svg { width: 26px; height: 26px; }
+  nav .links { margin-left: auto; display: flex; gap: 18px; font-size: .95rem; }
+  nav .links a { color: var(--fg-dim); }
+  nav .links a:hover { color: var(--fg); text-decoration: none; }
+  @media (max-width: 640px) { nav .links a.optional { display: none; } }
+
+  /* hero */
+  header { padding: 72px 0 40px; }
+  .eyebrow { font-family: var(--mono); font-size: .8rem; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: clamp(2.1rem, 5vw, 3.6rem); line-height: 1.08; margin: 12px 0 18px; letter-spacing: -.02em; font-weight: 700; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lede { font-size: 1.2rem; color: var(--fg-dim); max-width: 60ch; margin: 0 0 28px; }
+  .install {
+    display: flex; align-items: center; gap: 10px; max-width: 720px;
+    background: var(--bg-card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 12px 12px 16px;
+    font-family: var(--mono); font-size: .95rem; overflow: hidden;
+  }
+  .install .prompt { color: var(--accent); user-select: none; }
+  .install code { background: none; border: 0; padding: 0; white-space: nowrap; overflow: auto; flex: 1; }
+  .install button {
+    flex: none; font: inherit; font-size: .85rem; padding: 7px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg-elev); color: var(--fg);
+  }
+  .install button:hover { border-color: var(--accent); }
+  .hero-meta { display: flex; flex-wrap: wrap; gap: 16px 26px; margin-top: 18px; color: var(--fg-dim); font-size: .92rem; }
+  .hero-meta span::before { content: "▸ "; color: var(--accent); }
+  .shot { margin: 44px auto 0; max-width: 820px; }
+  .shot img { width: 100%; height: auto; display: block; border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow); }
+  .shot figcaption { text-align: center; color: var(--fg-dim); font-size: .9rem; margin-top: 12px; }
+
+  /* sections */
+  section { padding: 64px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: clamp(1.5rem, 3vw, 2.1rem); letter-spacing: -.01em; margin: 0 0 10px; }
+  .sub { color: var(--fg-dim); max-width: 64ch; margin: 0 0 32px; font-size: 1.05rem; }
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card { background: var(--bg-card); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
+  .card h3 { margin: 10px 0 8px; font-size: 1.08rem; }
+  .card p { margin: 0; color: var(--fg-dim); font-size: .97rem; }
+  .card .icon { width: 34px; height: 34px; color: var(--accent); }
+  .card.big { grid-column: span 1; }
+  .pill { display: inline-block; font-family: var(--mono); font-size: .75rem; padding: .15em .55em; border-radius: 999px; border: 1px solid var(--line); color: var(--fg-dim); margin-left: 6px; vertical-align: middle; }
+
+  /* fake panel rows for the "why" section */
+  .why { display: grid; gap: 22px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .why .card { display: flex; flex-direction: column; }
+  .term {
+    margin-top: 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+    font-family: var(--mono); font-size: .78rem; color: var(--fg-dim); white-space: pre; overflow: auto; line-height: 1.55;
+  }
+  .term b { color: var(--fg); font-weight: 500; }
+  .term .a { color: var(--accent); } .term .w { color: var(--warn); } .term .g { color: var(--ok); } .term .b { color: var(--accent-2); }
+
+  /* keys */
+  .keys { display: grid; gap: 10px 26px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .keys div { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: .95rem; }
+  .keys div span:first-child { flex: none; width: 92px; }
+  .keys div span:last-child { color: var(--fg-dim); }
+
+  /* settings table */
+  table { width: 100%; border-collapse: collapse; font-size: .93rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--fg-dim); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
+  td:first-child { white-space: nowrap; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-card); }
+
+  /* steps */
+  ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+  ol.steps li { counter-increment: s; display: grid; grid-template-columns: 38px 1fr; gap: 14px; align-items: start; }
+  ol.steps li::before { content: counter(s); display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--bg-card); border: 1px solid var(--line); font-family: var(--mono); color: var(--accent); }
+  ol.steps pre { margin: 8px 0 0; background: var(--bg-card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; overflow: auto; font-size: .9rem; }
+
+  footer { padding: 40px 0 60px; color: var(--fg-dim); font-size: .9rem; border-top: 1px solid var(--line); }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; align-items: center; }
+  footer .wrap span:last-child { margin-left: auto; }
+  .theme-toggle { font: inherit; font-size: .85rem; background: none; border: 1px solid var(--line); color: var(--fg-dim); border-radius: 8px; padding: 4px 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Dockarchy">
+      <svg viewBox="0 0 128 128" aria-hidden="true"><rect x="4" y="4" width="120" height="120" rx="28" fill="#1D63ED"/><g fill="#fff"><rect x="30" y="52" width="16" height="14" rx="2"/><rect x="48" y="52" width="16" height="14" rx="2"/><rect x="66" y="52" width="16" height="14" rx="2"/><rect x="48" y="36" width="16" height="14" rx="2"/><rect x="66" y="36" width="16" height="14" rx="2"/><rect x="66" y="20" width="16" height="14" rx="2"/></g><path fill="#fff" d="M14 70C14 68 16 67 18 67L92 67C100 67 104 61 110 60 114 59.5 118 61 120 64 118 74 112 82 104 88L100 90C86 100 68 104 50 100 34 96 22 88 16 78 14 75 14 72 14 70Z"/><path fill="#fff" d="M96 88C104 88 112 92 118 100 110 98 104 100 100 106 98 100 96 94 96 88Z"/><circle cx="106" cy="72" r="3.2" fill="#1D63ED"/></svg>
+      Dockarchy
+    </a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#keys" class="optional">Keys</a>
+      <a href="#settings" class="optional">Settings</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/XNinety9/dockarchy">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header id="top">
+  <div class="wrap">
+    <div class="eyebrow">An Omarchy bar plugin</div>
+    <h1>Every container, every host,<br>in <em>one</em> panel.</h1>
+    <p class="lede">Dockarchy watches the Docker daemon on your laptop <strong>and</strong> the ones on your servers over SSH — Podman too — and puts them in the Omarchy bar: Compose projects, live stats, logs, shell, image updates and notifications, all without leaving the desktop.</p>
+    <div class="install" role="group" aria-label="Install command">
+      <span class="prompt">$</span>
+      <code id="cmd">omarchy plugin add https://github.com/XNinety9/dockarchy.git --enable</code>
+      <button type="button" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="hero-meta">
+      <span>Free, WTFPL</span>
+      <span>No sudo, no daemon of its own</span>
+      <span>Remote hosts are plain <code>docker context</code>s</span>
+      <span>Reviewed on the <a href="https://plugins.omarchy.org">Omarchy plugin marketplace</a></span>
+    </div>
+    <figure class="shot">
+      <img src="preview.png" width="706" height="570" alt="The Dockarchy panel: a host section with containers, their CPU and memory, and per-row actions" loading="eager">
+      <figcaption>The panel, with alternating rows, stats and the sticky shortcut footer.</figcaption>
+    </figure>
+  </div>
+</header>
+
+<section id="why">
+  <div class="wrap">
+    <h2>Why another Docker widget?</h2>
+    <p class="sub">Most bar widgets show <code>docker ps</code> for the machine they run on. Dockarchy was built for the other case: the containers that matter are on a server somewhere, and you still want them one click away.</p>
+    <div class="why">
+      <div class="card">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
+        <h3>Remote hosts, done right</h3>
+        <p>A server is a Docker context with an <code>ssh://</code> endpoint — nothing to install there. Dockarchy polls every host in parallel, and for remote ones it opens <em>one</em> SSH session per poll that runs <code>docker ps</code> and <code>docker stats</code> on the server. (Polling through <code>docker --context</code> would open a session per container and get you banned by fail2ban. Ask us how we know.)</p>
+        <div class="term"><span class="a">▣ MAINSERV</span>                 <b>27/28</b>
+<span class="b">ssh://you@mainserv</span>
+  <span class="g">▸</span> <b>jellyfin</b>  8096→8096  <span class="w">↑</span>
+  <span class="g">▸</span> <b>caddy</b>     80→80, 443→443
+  <span class="w">▲</span> <b>netdata</b>   Up 5 days <span class="w">(unhealthy)</span></div>
+      </div>
+      <div class="card">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/><path d="M18 15l2 2 3-3"/></svg>
+        <h3>Compose projects as first-class rows</h3>
+        <p>Containers fold under their Compose project. A project row starts, stops or restarts every member in a single Docker call, tails <code>compose logs</code>, and pulls newer images then recreates the services. Fold state is remembered.</p>
+        <div class="term"><span class="a">▾ pokecollect</span>  3/3 running      <span class="g">▶ ■ ⟳</span>
+    ▸ pokecollect-web   web · Up 5 days
+    ▸ pokecollect-api   api · Up 5 days
+    ▸ pokecollect-db    db · Up 5 days
+<span class="a">▸ arr</span>          2/2 running</div>
+      </div>
+      <div class="card">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+        <h3>Knows when an image is stale</h3>
+        <p>Every few hours it compares each running image's digest with what the registry serves for that tag — one anonymous <code>HEAD</code> per image, from the host itself. Containers with a newer image get a badge; <kbd>p</kbd> pulls and recreates.</p>
+        <div class="term"><b>27 running · 1 unhealthy · <span class="w">3 updates</span></b>
+
+  <span class="g">▸</span> <b>prowlarr</b> <span class="w">↑</span>  linuxserver/prowlarr
+  <span class="g">▸</span> <b>jellyfin</b> <span class="w">↑</span>  linuxserver/jellyfin
+  <span class="g">▸</span> <b>netdata</b>  <span class="w">↑</span>  netdata/netdata</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Everything in the panel</h2>
+    <p class="sub">Mouse or keyboard, your call. The footer always shows the keys that apply to the selected row.</p>
+    <div class="grid">
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><h3>Search across hosts</h3><p><kbd>/</kbd> then type. Every word must match name, image, project, state or status — <code>unhealthy</code> lists the sick ones everywhere.</p></div>
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-6 4 4 5-8 4 5"/></svg><h3>Sparklines</h3><p>CPU, memory, network, disk or PIDs — pick the metrics — over a configurable number of polls, with min/avg/max on hover.</p></div>
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><h3>Notifications</h3><p>A container turns unhealthy or dies on its own, a host stops answering — you hear about it. Stops <em>you</em> asked for stay quiet. Recoveries optional.</p></div>
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg><h3>Logs &amp; shell</h3><p><kbd>l</kbd> tails logs, <kbd>s</kbd> drops you into <code>bash</code> (or <code>sh</code>) — in your terminal, over your own SSH config for remote hosts.</p></div>
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg><h3>Clickable ports</h3><p><code>8096→8096</code> under a name opens <code>http://host:8096</code> in the browser, host taken from the context. <kbd>o</kbd> opens the first one.</p></div>
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="1.5" fill="currentColor"/><circle cx="15" cy="12" r="1.5" fill="currentColor"/><circle cx="11" cy="18" r="1.5" fill="currentColor"/></svg><h3>Context menu</h3><p>Right-click or <kbd>m</kbd>: ports, logs, shell, inspect, restart, copy name or ID, kill or remove — the destructive ones behind a confirmation.</p></div>
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 9v11"/></svg><h3>Your bar, your label</h3><p>A Python-style template next to the whale: <code>{running}/{total} · {errors} err</code>. Fold hosts, hide stopped containers, sort by state, name, CPU or memory.</p></div>
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg><h3>Podman too <span class="pill">0.8</span></h3><p>List Podman hosts — local or over SSH — next to your Docker contexts. Same rows, same actions, <code>podman compose</code> for projects.</p></div>
+      <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h10M7 13h6"/></svg><h3>Omarchy menu</h3><p><code>bin/dockarchy-menu install</code> adds a Docker submenu to the Omarchy menu, on request, and <code>remove</code> takes it back out.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="keys">
+  <div class="wrap">
+    <h2>Keyboard</h2>
+    <p class="sub">Vim-flavoured, and the footer reminds you.</p>
+    <div class="keys">
+      <div><span><kbd>j</kbd> <kbd>k</kbd></span><span>Move across projects and hosts</span></div>
+      <div><span><kbd>⏎</kbd></span><span>Start / stop a container · fold a project or host</span></div>
+      <div><span><kbd>u</kbd> <kbd>d</kbd></span><span>Start / stop — a container, or a whole project</span></div>
+      <div><span><kbd>r</kbd></span><span>Restart</span></div>
+      <div><span><kbd>l</kbd> <kbd>→</kbd></span><span>Logs (<code>compose logs -f</code> on a project)</span></div>
+      <div><span><kbd>s</kbd></span><span>Shell into the container</span></div>
+      <div><span><kbd>i</kbd></span><span>Inspect</span></div>
+      <div><span><kbd>o</kbd></span><span>Open the first published port</span></div>
+      <div><span><kbd>p</kbd></span><span>Pull the newer image and recreate</span></div>
+      <div><span><kbd>U</kbd></span><span>Check registries for newer images now</span></div>
+      <div><span><kbd>m</kbd></span><span>Context menu</span></div>
+      <div><span><kbd>x</kbd></span><span>Kill (running) / remove (stopped), after confirming</span></div>
+      <div><span><kbd>c</kbd></span><span>Copy the container name</span></div>
+      <div><span><kbd>h</kbd></span><span>Hide / show the host's stopped containers</span></div>
+      <div><span><kbd>z</kbd></span><span>Fold / unfold every project</span></div>
+      <div><span><kbd>t</kbd></span><span>Cycle sort: State → Name → CPU → Memory</span></div>
+      <div><span><kbd>/</kbd></span><span>Search</span></div>
+      <div><span><kbd>R</kbd></span><span>Refresh</span></div>
+      <div><span><kbd>L</kbd></span><span>lazydocker for the selected host</span></div>
+      <div><span><kbd>Esc</kbd></span><span>Close</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="settings">
+  <div class="wrap">
+    <h2>Settings</h2>
+    <p class="sub">They live in the widget's entry in <code>~/.config/omarchy/shell.json</code>. Change them in the shell's settings UI or with <code>omarchy bar set x99.dockarchy &lt;key&gt; &lt;value&gt;</code> — they apply live.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Key</th><th>Default</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>contexts</code></td><td><em>all</em></td><td>Docker contexts to monitor.</td></tr>
+          <tr><td><code>podmanHosts</code></td><td><em>none</em></td><td>Podman hosts: <code>local</code> and/or <code>user@host[:port]</code>.</td></tr>
+          <tr><td><code>refreshIntervalSec</code></td><td><code>15</code></td><td>Poll interval, 5–3600 s.</td></tr>
+          <tr><td><code>timeoutSec</code></td><td><code>10</code></td><td>Per-host limit before it is marked unreachable.</td></tr>
+          <tr><td><code>showAll</code></td><td><code>true</code></td><td>Include stopped containers.</td></tr>
+          <tr><td><code>showStats</code></td><td><code>true</code></td><td>CPU % and memory per running container (<code>docker stats</code>).</td></tr>
+          <tr><td><code>showSparklines</code></td><td><code>true</code></td><td>Trend lines next to the stats.</td></tr>
+          <tr><td><code>sparkMetrics</code></td><td><code>CPU,Memory</code></td><td>Which metrics: <code>CPU</code>, <code>Memory</code>, <code>Network</code>, <code>Disk</code>, <code>PIDs</code>.</td></tr>
+          <tr><td><code>sparkSamples</code></td><td><code>20</code></td><td>Polls a sparkline spans.</td></tr>
+          <tr><td><code>groupByProject</code></td><td><code>true</code></td><td>Fold containers under their Compose project.</td></tr>
+          <tr><td><code>sortBy</code></td><td><code>State</code></td><td><code>State</code>, <code>Name</code>, <code>CPU</code> or <code>Memory</code>.</td></tr>
+          <tr><td><code>notifications</code></td><td><code>Problems</code></td><td><code>Off</code>, <code>Problems</code>, or <code>Problems and recoveries</code>.</td></tr>
+          <tr><td><code>updateCheckHours</code></td><td><code>6</code></td><td>Hours between registry checks for newer images; <code>0</code> disables.</td></tr>
+          <tr><td><code>barFormat</code></td><td><code>{running}</code></td><td>Bar label template: <code>{running}</code> <code>{stopped}</code> <code>{total}</code> <code>{unhealthy}</code> <code>{unreachable}</code> <code>{errors}</code> <code>{updates}</code> <code>{hosts}</code>.</td></tr>
+          <tr><td><code>panelWidth</code> / <code>panelMaxHeight</code></td><td><code>700</code> / <code>800</code></td><td>Popup size; it grows with content up to the max, then scrolls.</td></tr>
+          <tr><td><code>alternateRows</code></td><td><code>false</code></td><td>Shade every other row.</td></tr>
+          <tr><td><code>runningAccent</code></td><td><code>false</code></td><td>Tint running containers with the theme's accent colour.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Install</h2>
+    <p class="sub">Omarchy 4.x. You need the <code>docker</code> CLI and <code>jq</code> (both in Omarchy's base) and access to the Docker socket as your user. No sudo or pkexec is required.</p>
+    <ol class="steps">
+      <li><div>Add the plugin from GitHub and enable it.<pre>omarchy plugin add https://github.com/XNinety9/dockarchy.git --enable</pre></div></li>
+      <li><div>Optional — add a server. Any host you can <code>ssh</code> into non-interactively works; add <code>ControlMaster</code> to your <code>~/.ssh/config</code> for it so the one SSH session per poll is reused.<pre>docker context create mainserv --docker "host=ssh://you@mainserv"</pre></div></li>
+      <li><div>Optional — put it where you like on the bar, and pick a label.<pre>omarchy bar move x99.dockarchy --before omarchy.network
+omarchy bar set x99.dockarchy barFormat '{running}/{total} · {errors} err'</pre></div></li>
+      <li><div>To remove it later:<pre>omarchy plugin remove x99.dockarchy</pre></div></li>
+    </ol>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Dockarchy · <a href="https://github.com/XNinety9/dockarchy">source</a> · <a href="https://github.com/XNinety9/dockarchy/blob/main/README.md">README</a> · <a href="https://github.com/XNinety9/dockarchy/issues">issues</a></span>
+    <span>WTFPL · made for <a href="https://omarchy.org">Omarchy</a></span>
+    <span><button class="theme-toggle" type="button" onclick="toggleTheme()">Toggle theme</button></span>
+  </div>
+</footer>
+
+<script>
+  function copyCmd(btn) {
+    var text = document.getElementById("cmd").textContent;
+    navigator.clipboard.writeText(text).then(function () {
+      var old = btn.textContent; btn.textContent = "Copied"; setTimeout(function () { btn.textContent = old; }, 1400);
+    });
+  }
+  function toggleTheme() {
+    var root = document.documentElement;
+    var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var current = root.getAttribute("data-theme") || (dark ? "dark" : "light");
+    var next = current === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("dockarchy-theme", next); } catch (e) {}
+  }
+  try { var saved = localStorage.getItem("dockarchy-theme"); if (saved) document.documentElement.setAttribute("data-theme", saved); } catch (e) {}
+</script>
+</body>
+</html>
