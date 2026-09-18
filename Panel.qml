@@ -69,7 +69,7 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color hoverFill: bar ? Style.hoverFillFor(bar.foreground, Color.accent) : "transparent"
   readonly property string barFormat: docker.stringSetting("barFormat", "{running}")
-  readonly property string barLabel: docker.everRefreshed && docker.installed ? Model.formatBar(barFormat, docker.counts) : ""
+  readonly property string barLabel: docker.everRefreshed && docker.installed ? Model.formatBar(barFormat, docker.countsWithUpdates) : ""
   readonly property int panelWidth: docker.intSetting("panelWidth", 700, 300, 1400)
   readonly property int panelMaxHeight: docker.intSetting("panelMaxHeight", 800, 300, 1600)
   readonly property bool alternateRows: docker.boolSetting("alternateRows", false)
@@ -331,7 +331,7 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { docker.refresh(); return "ok" }
     function status(): string { return docker.summaryText }
-    function version(): string { return "0.8.0" }
+    function version(): string { return "0.8.1" }
     function running(): string { return String(docker.counts.running) }
     function settings(): string { return JSON.stringify({ settings: root.settings, contexts: docker.contexts }) }
     function rows(): string {
@@ -1187,13 +1187,15 @@ Panel {
         spacing: Style.space(1)
 
         RowLayout {
+          id: nameRow
           Layout.fillWidth: true
           spacing: Style.space(6)
 
           Text {
             textFormat: Text.PlainText
-            Layout.fillWidth: true
-            Layout.maximumWidth: implicitWidth
+            // Natural width, capped so a very long name still elides instead
+            // of pushing the badge out; the spacer takes the rest.
+            Layout.maximumWidth: nameRow.width - (updateBadge.visible ? updateBadge.implicitWidth + nameRow.spacing : 0)
             text: row.container ? row.container.name : ""
             color: row.container && row.container.running ? root.runningColor : root.dim
             font.family: root.fontFamily
@@ -1229,14 +1231,14 @@ Panel {
         }
 
         RowLayout {
+          id: detailRow
           Layout.fillWidth: true
           visible: row.container && (row.container.image !== "" || row.container.published.length > 0)
           spacing: Style.space(6)
 
           Text {
             textFormat: Text.PlainText
-            Layout.fillWidth: true
-            Layout.maximumWidth: implicitWidth
+            Layout.maximumWidth: Math.max(Style.space(80), detailRow.width * 0.6)
             text: row.container ? row.container.image : ""
             color: root.dim
             font.family: root.fontFamily

@@ -113,6 +113,13 @@
   .term b { color: var(--fg); font-weight: 500; }
   .term .a { color: var(--accent); } .term .w { color: var(--warn); } .term .g { color: var(--ok); } .term .b { color: var(--accent-2); }
 
+  /* tour */
+  .tour { display: grid; gap: 28px; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); }
+  @media (max-width: 520px) { .tour { grid-template-columns: 1fr; } }
+  .tour figure { margin: 0; }
+  .tour img { width: 100%; height: auto; display: block; border-radius: 12px; border: 1px solid var(--line); box-shadow: var(--shadow); }
+  .tour figcaption { color: var(--fg-dim); font-size: .92rem; margin-top: 10px; }
+
   /* keys */
   .keys { display: grid; gap: 10px 26px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
   .keys div { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: .95rem; }
@@ -148,6 +155,7 @@
     </a>
     <div class="links">
       <a href="#features">Features</a>
+      <a href="#tour" class="optional">Tour</a>
       <a href="#keys" class="optional">Keys</a>
       <a href="#settings" class="optional">Settings</a>
       <a href="#install">Install</a>
@@ -174,7 +182,7 @@
     </div>
     <figure class="shot">
       <img src="preview.png" width="706" height="570" alt="The Dockarchy panel: a host section with containers, their CPU and memory, and per-row actions" loading="eager">
-      <figcaption>The panel, with alternating rows, stats and the sticky shortcut footer.</figcaption>
+      <figcaption>Two Compose projects and a standalone container on one host: stats with sparklines, update badges, the sticky shortcut footer.</figcaption>
     </figure>
   </div>
 </header>
@@ -232,6 +240,23 @@
       <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 9v11"/></svg><h3>Your bar, your label</h3><p>A Python-style template next to the whale: <code>{running}/{total} · {errors} err</code>. Fold hosts, hide stopped containers, sort by state, name, CPU or memory.</p></div>
       <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg><h3>Podman too <span class="pill">0.8</span></h3><p>List Podman hosts — local or over SSH — next to your Docker contexts. Same rows, same actions, <code>podman compose</code> for projects.</p></div>
       <div class="card"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h10M7 13h6"/></svg><h3>Omarchy menu</h3><p><code>bin/dockarchy-menu install</code> adds a Docker submenu to the Omarchy menu, on request, and <code>remove</code> takes it back out.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="tour">
+  <div class="wrap">
+    <h2>A closer look</h2>
+    <p class="sub">Straight from the bar, no mock-ups.</p>
+    <div class="tour">
+      <figure><img src="shots/search.png" width="728" height="316" alt="The panel filtered on 'unhealthy': one matching container" loading="lazy"><figcaption><kbd>/</kbd> <code>unhealthy</code> — hosts without a match disappear.</figcaption></figure>
+      <figure><img src="shots/menu.png" width="728" height="392" alt="The context menu on a container: open port, logs, shell, inspect, restart, stop, copy, kill" loading="lazy"><figcaption>Right-click or <kbd>m</kbd>: everything for one container, kill and remove behind a confirmation.</figcaption></figure>
+      <figure><img src="shots/folded.png" width="728" height="400" alt="The panel with both Compose projects folded and two standalone containers" loading="lazy"><figcaption><kbd>z</kbd> folds every project; the state is remembered.</figcaption></figure>
+      <figure>
+        <img src="shots/notification.png" width="420" height="110" alt="A desktop notification: sandbox stopped, Exited (137)" loading="lazy">
+        <img src="shots/bar.png" width="1120" height="56" alt="The Omarchy bar with the Dockarchy label 10/12 · 4 upd · 1 err" loading="lazy" style="margin-top:14px">
+        <figcaption>A container died on its own → a notification with the theme-coloured whale. The bar label is a template: here <code>{running}/{total} · {updates} upd · {errors} err</code>.</figcaption>
+      </figure>
     </div>
   </div>
 </section>

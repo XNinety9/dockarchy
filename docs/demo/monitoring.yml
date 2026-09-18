@@ -1,0 +1,22 @@
+# Second demo project so the panel shows more than one Compose group.
+#   docker compose -f docs/demo/monitoring.yml up -d
+name: monitoring
+
+services:
+  exporter:
+    image: python:3-alpine
+    command: python -m http.server 9100
+    ports: ["9100:9100"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9100/')\""]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  agent:
+    image: alpine
+    command: sh -c 'while true; do sleep 30; done'
+
+  grafana:
+    image: nginx:alpine
+    ports: ["3000:80"]

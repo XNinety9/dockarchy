@@ -12,6 +12,17 @@ search across hosts, and get a desktop notification when something breaks.
 
 ![Dockarchy panel](preview.png)
 
+<p>
+  <img src="docs/shots/search.png" width="364" alt="Search: unhealthy">
+  <img src="docs/shots/folded.png" width="364" alt="Compose projects folded">
+</p>
+<p>
+  <img src="docs/shots/menu.png" width="364" alt="Context menu on a container">
+  <img src="docs/shots/notification.png" width="364" alt="Notification: sandbox stopped">
+</p>
+
+Site: **https://xninety9.github.io/dockarchy/**
+
 ## Requirements
 
 - Omarchy 4.x (the Quickshell-based `omarchy-shell`).
@@ -332,11 +343,13 @@ without a daemon. CI runs the same plus shell syntax, manifest and icon checks.
 
 [`docs/demo/compose.yml`](docs/demo/compose.yml) starts seven throwaway
 containers covering every state the widget renders — healthy, running,
-unhealthy and exited — grouped under the compose project `demo`:
+unhealthy and exited — grouped under the compose project `demo`;
+[`docs/demo/monitoring.yml`](docs/demo/monitoring.yml) adds a second project:
 
 ```bash
 docker compose -f docs/demo/compose.yml up -d
-docker compose -f docs/demo/compose.yml down
+docker compose -f docs/demo/monitoring.yml up -d
+docker compose -f docs/demo/compose.yml down && docker compose -f docs/demo/monitoring.yml down
 ```
 
 ## Developing
@@ -348,6 +361,9 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
+- **0.8.1** — fix container names and images being elided with room to spare;
+  fix `{updates}` in the bar label always reading 0; new screenshots and the
+  project site.
 - **0.8.0** — Podman hosts (`podmanHosts`: local or over ssh) alongside Docker
   contexts, with the same rows, stats, actions and update checks.
 - **0.7.0** — image update detection by registry digest, with a badge per
