@@ -610,6 +610,12 @@ function snapshot(hosts) {
   return snap
 }
 
+// notify-send bodies are markup on Omarchy's daemon; container names and
+// status lines come from the daemon and must not be able to inject tags.
+function escapeMarkup(text) {
+  return String(text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
 // Events between two snapshots. `touched` maps "host/id" keys to the verb the
 // user just ran on that container (start/stop/restart/…), so the transition
 // they asked for is not reported — while anything else still is: a container
@@ -723,6 +729,6 @@ if (typeof module !== "undefined") {
     metricCurrent: metricCurrent, metricLabel: metricLabel, windowText: windowText,
     parseUpdates: parseUpdates,
     matchesQuery: matchesQuery, filterContainers: filterContainers, groupContainers: groupContainers, groupKey: groupKey, groupSummary: groupSummary,
-    sshArgv: sshArgv, shellQuote: shellQuote, snapshot: snapshot, diffSnapshots: diffSnapshots
+    sshArgv: sshArgv, shellQuote: shellQuote, snapshot: snapshot, diffSnapshots: diffSnapshots, escapeMarkup: escapeMarkup
   }
 }

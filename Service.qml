@@ -240,6 +240,11 @@ Item {
   function notifyChanges(events) {
     if (notifications === "Off") return
     var now = Date.now()
+    // Forget debounce entries older than the longest quiet period so the map
+    // does not grow for the lifetime of the shell.
+    var kept = {}
+    for (var k in _notified) if (now - _notified[k] < 130000) kept[k] = _notified[k]
+    _notified = kept
     for (var i = 0; i < events.length; i++) {
       var e = events[i]
       if (e.kind === "recovery" && notifications !== "Problems and recoveries") continue
@@ -251,7 +256,7 @@ Item {
       Quickshell.execDetached(["notify-send", "-a", "Dockarchy", "-u", e.kind === "problem" ? "critical" : "normal",
         "-i", e.kind === "problem" ? iconProblem : iconRecovery,
         "-h", "string:x-canonical-private-synchronous:dockarchy-" + dedupe,
-        String(e.title), String(e.body || "")])
+        Model.escapeMarkup(e.title), Model.escapeMarkup(e.body || "")])
     }
   }
 
@@ -319,6 +324,21 @@ Item {
   // progress and any error. Compose containers use their project directory
   // (docker compose pull/up -d for that service); standalone ones can only be
   // pulled — recreating them needs their original run arguments.
+  // What pullAndRecreate would run, for the confirmation dialog: the compose
+  // directory comes from a container label, i.e. from whoever created the
+  // container on that host, so the user sees it before compose runs there.
+  function pullDescription(host, container) {
+    if (!host || !container) return ""
+    if (container.project && container.workingDir)
+      return "cd " + container.workingDir + " && " + engineName(host) + " compose pull" + (container.service ? " " + container.service : "") + " && " + engineName(host) + " compose up -d" + (container.service ? " " + container.service : "")
+    return engineName(host) + " pull " + container.image
+  }
+
+  function pullProjectDescription(host, group) {
+    if (!host || !group || !group.workingDir) return ""
+    return "cd " + group.workingDir + " && " + engineName(host) + " compose pull && " + engineName(host) + " compose up -d"
+  }
+
   function pullAndRecreate(host, container) {
     if (!host || !container) return
     var body

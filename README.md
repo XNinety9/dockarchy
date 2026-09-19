@@ -362,10 +362,12 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
-- **0.8.2** — every process the widget spawns (actions, status, update
-  checks) now runs under `bin/dockarchy-exec`, which caps stdout and stderr
-  while streaming, so a hostile daemon or ssh peer cannot exhaust the shell's
-  memory; per-host ceilings and timeouts unchanged.
+- **0.8.2** — hardening pass, see [SECURITY.md](SECURITY.md): every spawned
+  process runs under `bin/dockarchy-exec` with stdout/stderr ceilings;
+  notification text is markup-escaped; clipboard copies avoid the shell;
+  registry token realms must be https and responses are capped; *pull &
+  recreate* shows the exact command and directory before running; fixed a
+  recursive layout warning on container rows.
 - **0.8.1** — fix container names and images being elided with room to spare;
   fix `{updates}` in the bar label always reading 0; new screenshots and the
   project site.
@@ -394,6 +396,11 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
   remote polling switched to a single SSH session per host.
 - **0.1.0** — first release: multi-context status, start/stop/restart, logs,
   shell, keyboard navigation.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the trust boundaries, the byte and time
+limits applied to every host, and what the plugin never does.
 
 ## License
 

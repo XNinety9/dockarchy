@@ -266,6 +266,12 @@ test("parseUpdates", () => {
   assert.equal(Model.formatBar("{running} · {updates} upd", counts), "3 · 2 upd");
 });
 
+test("notification text cannot inject markup", () => {
+  assert.equal(Model.escapeMarkup('<img src="http://x"> & <b>y</b>'), "&lt;img src=\"http://x\"&gt; &amp; &lt;b&gt;y&lt;/b&gt;");
+  assert.equal(Model.escapeMarkup(""), "");
+  assert.equal(Model.escapeMarkup(null), "");
+});
+
 test("glyphs", () => {
   assert.equal(Model.stateGlyph({ running: true, state: "running", health: "" }), "󰐊");
   assert.equal(Model.stateGlyph({ running: true, state: "running", health: "unhealthy" }), "󰀦");

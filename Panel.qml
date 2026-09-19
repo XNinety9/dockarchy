@@ -227,8 +227,28 @@ Panel {
     confirm.pendingRow = null
     confirm.pendingVerb = ""
     root.confirmOpen = false
-    if (accepted && row) docker.containerAction(row.host, row.container, verb)
+    if (accepted && row) {
+      if (verb === "pull") docker.pullAndRecreate(row.host, row.container)
+      else if (verb === "pull-project") docker.pullProject(row.host, row.group)
+      else docker.containerAction(row.host, row.container, verb)
+    }
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  // Pulling runs compose inside a directory named by a container label, so
+  // show exactly what will run, on which host, before doing it.
+  function requestPull(row) {
+    if (!row || row.kind === "host") return
+    var text = row.kind === "group" ? docker.pullProjectDescription(row.host, row.group) : docker.pullDescription(row.host, row.container)
+    if (text === "") return
+    confirm.pendingVerb = row.kind === "group" ? "pull-project" : "pull"
+    confirm.pendingRow = row
+    confirm.message = "On " + row.host.name + ":\n" + text
+    confirm.confirmText = "Run"
+    confirm.selectedIndex = 0
+    confirm.opened = true
+    root.confirmOpen = true
+    Qt.callLater(function() { confirmKeys.forceActiveFocus() })
   }
 
   function openMenu(row) {
@@ -447,8 +467,7 @@ Panel {
         else if (t === "o") root.openFirstPort(row)
         else if (t === "m") root.openMenu(row)
         else if (t === "i" && row && row.kind === "container") docker.openInspect(row.host, row.container)
-        else if (t === "p" && row && row.kind === "container") docker.pullAndRecreate(row.host, row.container)
-        else if (t === "p" && row && row.kind === "group") docker.pullProject(row.host, row.group)
+        else if (t === "p") root.requestPull(row)
         else if (t === "U") docker.checkUpdates(true)
         else if (t === "s" && row && row.kind === "container") docker.openShell(row.host, row.container)
         else if (t === "c" && row && row.kind === "container") docker.copyToClipboard(row.container.name)
@@ -976,7 +995,7 @@ Panel {
         foreground: Color.accent
         fontFamily: root.fontFamily
         Layout.alignment: Qt.AlignVCenter
-        onClicked: docker.pullProject(groupRow.host, groupRow.group)
+        onClicked: root.requestPull({ kind: "group", host: groupRow.host, group: groupRow.group, key: groupRow.key })
       }
 
       PanelActionButton {
@@ -1073,7 +1092,7 @@ Panel {
       if (!item) return
       var r = { kind: "container", host: host, group: group, container: container, key: key }
       if (item.kind === "port") docker.openPort(host, item.port)
-      else if (item.kind === "pull") docker.pullAndRecreate(host, container)
+      else if (item.kind === "pull") root.requestPull(r)
       else if (item.kind === "logs") docker.openLogs(host, container)
       else if (item.kind === "shell") docker.openShell(host, container)
       else if (item.kind === "inspect") docker.openInspect(host, container)
@@ -1223,7 +1242,7 @@ Panel {
               anchors.margins: -Style.space(2)
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: docker.pullAndRecreate(row.host, row.container)
+              onClicked: root.requestPull({ kind: "container", host: row.host, group: row.group, container: row.container, key: row.key })
             }
 
             PanelToolTip {
