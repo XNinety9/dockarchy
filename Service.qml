@@ -114,6 +114,14 @@ Item {
     onTriggered: root.renderIcons()
   }
 
+  // Every process the widget spawns runs under bin/dockarchy-exec, which caps
+  // stdout/stderr while streaming, so a hostile daemon or ssh peer can never
+  // grow the StdioCollectors below beyond a few dozen KiB (actions) or the
+  // documented ceilings (status, updates).
+  function bounded(timeoutSec, maxBytes, argv) {
+    return [pluginDir + "/bin/dockarchy-exec", "--timeout", String(timeoutSec), "--max-bytes", String(maxBytes), "--"].concat(argv)
+  }
+
   readonly property string pluginDir: {
     var url = Qt.resolvedUrl(".").toString()
     return url.replace(/^file:\/\//, "").replace(/\/$/, "")
@@ -183,7 +191,8 @@ Item {
       cmd.push("--")
       for (var i = 0; i < contexts.length; i++) cmd.push(contexts[i])
     }
-    statusProcess.command = cmd
+    // The collector already bounds each host at 8 MiB; this is the overall lid.
+    statusProcess.command = bounded(timeoutSec + 20, 32 * 1024 * 1024, cmd)
     statusProcess.running = true
     // refresh() bails while a poll is in flight, so this only re-arms when a
     // fresh process actually starts — a hung one can never push the deadline.
@@ -278,7 +287,7 @@ Item {
       "--cache", iconDir + "/updates.json", "--max-age", String(force ? 0 : updateCheckHours * 3600)]
     if (podmanHosts.length > 0) cmd.push("--podman", podmanHosts.join(","))
     if (contexts.length > 0) { cmd.push("--"); for (var i = 0; i < contexts.length; i++) cmd.push(contexts[i]) }
-    updatesProcess.command = cmd
+    updatesProcess.command = bounded(180, 8 * 1024 * 1024, cmd)
     updatesProcess.running = true
   }
 
@@ -393,7 +402,7 @@ Item {
     pendingActionKey = actionKey(host, container)
     markUserTouched(host, [container], verb)
     actionStatus = (verb === "rm" ? "Removing " : verb === "stop" ? "Stopping " : capitalize(verb) + "ing ") + container.name + "…"
-    actionProcess.command = ["timeout", String(Math.max(timeoutSec, 30))].concat(engineCommand(host, [verb, String(container.id)]))
+    actionProcess.command = bounded(Math.max(timeoutSec, 30), 65536, engineCommand(host, [verb, String(container.id)]))
     actionProcess.running = true
   }
 
@@ -416,7 +425,7 @@ Item {
     actionStatus = capitalize(verb) + "ing " + (group.project || "standalone containers") + " (" + targets.length + ")…"
     var argv = [verb]
     for (var t = 0; t < targets.length; t++) argv.push(String(targets[t].id))
-    actionProcess.command = ["timeout", String(Math.max(timeoutSec, 60))].concat(engineCommand(host, argv))
+    actionProcess.command = bounded(Math.max(timeoutSec, 60), 65536, engineCommand(host, argv))
     actionProcess.running = true
   }
 
@@ -582,7 +591,9 @@ Item {
       var stdout = String(actionStdout.text || root._actionOutput || "")
       var stderr = String(actionStderr.text || root._actionError || "")
       root.pendingActionKey = ""
-      if (exitCode !== 0) {
+      if (exitCode === 125) {
+        root.actionStatus = "Command output exceeded the size limit; state refreshed anyway"
+      } else if (exitCode !== 0) {
         root.actionStatus = root.elide(Model.shortError(stderr || stdout) || "docker command failed")
       } else {
         root.actionStatus = ""

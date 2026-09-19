@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Run a command for the shell with hard output ceilings.
+#
+#   dockarchy-exec [--timeout SEC] [--max-bytes N] -- command [args...]
+#
+# Every one-shot action the widget launches (docker/podman start, stop,
+# restart, kill, rm — locally or over ssh) goes through here, so a hostile
+# daemon or ssh peer that streams data cannot exhaust the shell's memory:
+# stdout is cut at N bytes (default 64 KiB) and stderr at 64 KiB *while
+# streaming*, and only the bounded remainder is forwarded to the caller.
+#
+# Exit status: the command's own (124 from `timeout`), or 125 when stdout
+# exceeded the ceiling — the output is then truncated, never partial JSON
+# pretending to be whole.
+
+set -uo pipefail
+
+TIMEOUT=30
+MAX_BYTES=65536
+STDERR_MAX=65536
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --timeout) TIMEOUT="${2:-30}"; shift 2 ;;
+  --max-bytes) MAX_BYTES="${2:-65536}"; shift 2 ;;
+  --) shift; break ;;
+  *) break ;;
+  esac
+done
+[[ $# -gt 0 ]] || { echo "dockarchy-exec: no command given" >&2; exit 2; }
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+OUT="$TMP/out"
+ERR="$TMP/err"
+
+# stdout -> fd 3 -> head -> OUT ; stderr -> head -> ERR. The inner `exit`
+# surfaces the command's status through the outer PIPESTATUS.
+{ timeout "$TIMEOUT" "$@" 2>&1 1>&3 3>&- | head -c "$STDERR_MAX" >"$ERR"; exit "${PIPESTATUS[0]}"; } 3>&1 | head -c "$((MAX_BYTES + 1))" >"$OUT"
+rc="${PIPESTATUS[0]}"
+
+size=$(stat -c %s "$OUT" 2>/dev/null || echo 0)
+if [[ $size -gt $MAX_BYTES ]]; then
+  head -c "$MAX_BYTES" "$OUT"
+  printf '\n[dockarchy-exec] output exceeded %s bytes and was truncated\n' "$MAX_BYTES" >&2
+  cat "$ERR" >&2
+  exit 125
+fi
+cat "$OUT"
+cat "$ERR" >&2
+exit "$rc"

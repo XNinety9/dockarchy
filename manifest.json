@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "x99.dockarchy",
   "name": "Dockarchy",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "author": "XNinety9",
   "license": "WTFPL",
   "description": "Docker and Podman container status for local and remote (ssh) hosts in the Omarchy bar: CPU/memory sparklines, Compose projects, start/stop/restart, logs, shell, image updates and notifications.",

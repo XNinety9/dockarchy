@@ -331,7 +331,7 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): string { docker.refresh(); return "ok" }
     function status(): string { return docker.summaryText }
-    function version(): string { return "0.8.1" }
+    function version(): string { return "0.8.2" }
     function running(): string { return String(docker.counts.running) }
     function settings(): string { return JSON.stringify({ settings: root.settings, contexts: docker.contexts }) }
     function rows(): string {

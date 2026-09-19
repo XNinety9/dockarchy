@@ -323,6 +323,7 @@ bin/dockarchy-status    queries every context in parallel (one ssh session per
 bin/dockarchy-contexts  lists context names for the settings picker
 bin/dockarchy-menu      adds/removes the Docker submenu in the Omarchy menu
 bin/dockarchy-updates   compares image digests with their registries (on each host)
+bin/dockarchy-exec      runs every spawned process with stdout/stderr byte ceilings
 ```
 
 `bin/dockarchy-status --all --stats --timeout 5 [ctx ...] | jq .` shows exactly
@@ -361,6 +362,10 @@ recreate the widget, but Qt keeps serving the previously compiled type, so run
 
 ## Changelog
 
+- **0.8.2** — every process the widget spawns (actions, status, update
+  checks) now runs under `bin/dockarchy-exec`, which caps stdout and stderr
+  while streaming, so a hostile daemon or ssh peer cannot exhaust the shell's
+  memory; per-host ceilings and timeouts unchanged.
 - **0.8.1** — fix container names and images being elided with room to spare;
   fix `{updates}` in the bar label always reading 0; new screenshots and the
   project site.
