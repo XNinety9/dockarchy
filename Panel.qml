@@ -1186,16 +1186,19 @@ Panel {
         Layout.fillWidth: true
         spacing: Style.space(1)
 
-        RowLayout {
+        Item {
           id: nameRow
           Layout.fillWidth: true
-          spacing: Style.space(6)
+          implicitHeight: nameText.implicitHeight
+          readonly property real badgeSpace: updateBadge.visible ? updateBadge.implicitWidth + Style.space(6) : 0
 
           Text {
+            id: nameText
             textFormat: Text.PlainText
-            // Natural width, capped so a very long name still elides instead
-            // of pushing the badge out; the spacer takes the rest.
-            Layout.maximumWidth: nameRow.width - (updateBadge.visible ? updateBadge.implicitWidth + nameRow.spacing : 0)
+            // Natural width, capped by the row so a very long name elides
+            // instead of pushing the badge out. Plain anchors: a Layout here
+            // would make the cap depend on the width it is computing.
+            width: Math.min(implicitWidth, Math.max(0, nameRow.width - nameRow.badgeSpace))
             text: row.container ? row.container.name : ""
             color: row.container && row.container.running ? root.runningColor : root.dim
             font.family: root.fontFamily
@@ -1206,6 +1209,9 @@ Panel {
           Text {
             id: updateBadge
             visible: row.imageUpdate !== null
+            anchors.left: nameText.right
+            anchors.leftMargin: Style.space(6)
+            anchors.verticalCenter: nameText.verticalCenter
             text: "󰚰"
             color: Color.accent
             font.family: root.fontFamily
@@ -1226,19 +1232,18 @@ Panel {
               fontFamily: root.fontFamily
             }
           }
-
-          Item { Layout.fillWidth: true }
         }
 
-        RowLayout {
+        Item {
           id: detailRow
           Layout.fillWidth: true
           visible: row.container && (row.container.image !== "" || row.container.published.length > 0)
-          spacing: Style.space(6)
+          implicitHeight: imageText.implicitHeight
 
           Text {
+            id: imageText
             textFormat: Text.PlainText
-            Layout.maximumWidth: Math.max(Style.space(80), detailRow.width * 0.6)
+            width: Math.min(implicitWidth, Math.max(Style.space(80), detailRow.width * 0.6))
             text: row.container ? row.container.image : ""
             color: root.dim
             font.family: root.fontFamily
@@ -1246,24 +1251,29 @@ Panel {
             elide: Text.ElideRight
           }
 
-          Repeater {
-            model: row.container ? row.container.published.slice(0, 4) : []
-            PortChip {
-              required property var modelData
-              port: modelData
-              host: row.host
+          Row {
+            anchors.left: imageText.right
+            anchors.leftMargin: Style.space(6)
+            anchors.verticalCenter: imageText.verticalCenter
+            spacing: Style.space(6)
+
+            Repeater {
+              model: row.container ? row.container.published.slice(0, 4) : []
+              PortChip {
+                required property var modelData
+                port: modelData
+                host: row.host
+              }
+            }
+
+            Text {
+              visible: row.container && row.container.published.length > 4
+              text: "+" + (row.container ? row.container.published.length - 4 : 0)
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
             }
           }
-
-          Text {
-            visible: row.container && row.container.published.length > 4
-            text: "+" + (row.container ? row.container.published.length - 4 : 0)
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          Item { Layout.fillWidth: true }
         }
 
         Text {
